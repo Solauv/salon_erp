@@ -2,7 +2,7 @@
 /* Copyright (C) 2017       Laurent Destailleur     <eldy@users.sourceforge.net>
  * Copyright (C) 2024-2025  Frédéric France         <frederic.france@free.fr>
  * Copyright (C) 2025		Anthony Berton 			<anthony.berton@bb2a.fr>
- * Copyright (C) 2026		EBI
+ * Copyright (C) 2026		Solauv
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by

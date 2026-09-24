@@ -1,5 +1,5 @@
 <?php
-/* Copyright (C) 2026		EBI
+/* Copyright (C) 2026		Solauv
  * Copyright (C) 2025       Frédéric France         <frederic.france@free.fr>
  *
  * This program is free software: you can redistribute it and/or modify
