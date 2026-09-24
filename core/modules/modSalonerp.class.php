@@ -236,7 +236,24 @@ class modSalonerp extends DolibarrModules
 			'object' => 'Campaign'
 		);
 
-		// No export/import profile in this lot.
+		// Decrypt a vote file outside the campaign it comes from: file + the
+		// revealed private key, no database lookup (works on any instance).
+		$this->menu[$r++] = array(
+			'fk_menu' => 'fk_mainmenu=salonerp,fk_leftmenu=campaign',
+			'type' => 'left',
+			'titre' => 'ExternalDecryption',
+			'mainmenu' => 'salonerp',
+			'leftmenu' => 'salonerp_external_decryption',
+			'url' => '/salonerp/decrypt_external.php',
+			'langs' => 'salonerp@salonerp',
+			'position' => 1000 + $r,
+			'enabled' => "isModEnabled('salonerp')",
+			'perms' => '$user->hasRight("salonerp", "campaign", "read")',
+			'target' => '',
+			'user' => 0,
+		);
+
+		// No export/import profile.
 	}
 
 	/**

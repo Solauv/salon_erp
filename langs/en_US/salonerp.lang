@@ -172,6 +172,51 @@ CampaignVoter = Voter
 CampaignDistribution = Distribution
 
 #
+# Vote file check and decryption (lot 4)
+#
+VoteFileDecryptTab = Decrypt
+VoteFileDecryptTabText = Drop a vote file downloaded from this campaign: the module checks it is intact and matches the official chain. Decryption becomes possible once the votes are revealed.
+VoteFileDecryptTabTextRevealed = Drop a vote file downloaded from this campaign: the module checks it is intact and matches the official chain, then decrypts it with the revealed key.
+VoteFileCheck = Check the file
+VoteFileCheckAndDecrypt = Check and decrypt
+VoteFileNotStored = The file is read then forgotten: it is never kept on the server.
+VoteFileGeneratedAt = File generated on
+VoteFileChecks = Checks
+VoteFileDecryptedVotes = Decrypted votes
+VoteFileCheckCampaign = Campaign
+VoteFileCheckCampaignOk = The file does belong to campaign %s (same genesis hash).
+VoteFileCheckCampaignKo = The file (campaign "%s") does not belong to campaign %s: its genesis hash differs.
+VoteFileCheckGenesis = Genesis
+VoteFileCheckGenesisOk = The file's genesis matches its hash.
+VoteFileCheckGenesisKo = The file's genesis does not match its hash: it was altered.
+VoteFileCheckChain = File chain
+VoteFileCheckChainOk = The file holds %s vote(s), which form an intact chain from the genesis.
+VoteFileCheckChainKo = The file chain is altered: %s.
+VoteChainGenesisMismatch = the genesis does not match its hash
+VoteChainSeqBroken = the numbering breaks at vote #%s
+VoteChainPrevHashMismatch = the link (prev_hash) of vote #%s does not point to the previous vote
+VoteChainHashMismatch = the content of vote #%s does not match its hash
+VoteFileCheckOfficial = Official chain
+VoteFileCheckOfficialOk = The %s vote(s) of the file appear identically, at the same rank, among the %s official vote(s).
+VoteFileCheckOfficialOlder = The file was downloaded before the last votes: that is normal.
+VoteFileCheckOfficialMissing = Vote #%s of the file is missing from the official chain, which only holds %s votes: a vote vanished from the database, or the file was altered.
+VoteFileCheckOfficialDiverge = The file and the official chain part from vote #%s on: one of them was altered.
+VoteFileBallotUnreadable = Vote unreadable with this key.
+VoteFileBallotMisplaced = This vote presents itself as #%s of campaign "%s": it was moved.
+ExternalDecryption = External decryption
+ExternalDecryptionText = Check and decrypt a vote file of any campaign, even one held on another Dolibarr instance: only the file and the revealed private key are used, nothing is read from the database. Without a key, only the integrity checks are run.
+VoteFile = Vote file (.json)
+RevealedPrivateKey = Revealed private key
+RevealedPrivateKeyHelp = Shown in the campaign's Results tab once the votes are revealed.
+ManualDecryptionTitle = Decrypt without Dolibarr
+ManualDecryptionText = The vote file can also be checked and decrypted on any computer, without Dolibarr or this module, with the script below. It only needs PHP 7.2 or later with the sodium extension, shipped by default.
+ManualDecryptionStep1 = Download the script (or copy it into a file dechiffrer-votes.php) and put it next to the vote file.
+ManualDecryptionStep2 = Note the revealed private key in the campaign's Results tab.
+ManualDecryptionStep3 = In a terminal, run: php dechiffrer-votes.php FILE.json PRIVATE_KEY
+ManualDecryptionStep4 = The script checks the genesis then each link of the chain, and prints each vote in clear: voter, date and points by thirdparty. A link marked "ALTÉRÉE" proves the file was altered.
+ManualDecryptionDownload = Download the script
+
+#
 # Tie-break rule, fixed at validation and part of the genesis hash
 #
 CampaignTieRuleTitle = Tie-break rule
@@ -230,3 +275,5 @@ ErrorCampaignBallotMismatch = Vote #%s does not match its record: reveal refused
 ErrorCampaignNotRevealed = The votes of this campaign have not been revealed yet.
 ErrorCampaignOnlyCreatorCanAttribute = Only the campaign manager can assign the sales reps.
 ErrorCampaignAlreadyAttributed = The sales reps of this campaign have already been assigned.
+ErrorVoteFileInvalid = Unreadable vote file (%s).
+ErrorVoteFileMissing = No valid vote file was dropped (5 MB at most).

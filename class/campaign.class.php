@@ -1291,25 +1291,29 @@ class Campaign extends CommonObject
 	 * @param	string								$genesisPayload	Genesis payload, as stored
 	 * @param	string								$genesisHash	Genesis hash, as stored
 	 * @param	array<array{seq:int,prev_hash:string,ciphertext:string,hash:string}>	$votes	Votes in chain order
-	 * @return	string								'' if the chain is intact, else the (untranslated) reason
+	 * @return	string								'' if the chain is intact, else the translated reason
 	 */
 	public static function verifyChain(string $genesisPayload, string $genesisHash, array $votes): string
 	{
+		global $langs;
+
+		$langs->load('salonerp@salonerp');
+
 		if (!hash_equals($genesisHash, hash('sha256', $genesisPayload))) {
-			return 'genesis payload does not match the genesis hash';
+			return $langs->trans('VoteChainGenesisMismatch');
 		}
 
 		$prev = $genesisHash;
 		$expectedSeq = 1;
 		foreach ($votes as $vote) {
 			if ((int) $vote['seq'] !== $expectedSeq) {
-				return 'vote '.$expectedSeq.': sequence broken';
+				return $langs->trans('VoteChainSeqBroken', $expectedSeq);
 			}
 			if (!hash_equals($prev, (string) $vote['prev_hash'])) {
-				return 'vote '.$expectedSeq.': prev_hash does not match the previous hash';
+				return $langs->trans('VoteChainPrevHashMismatch', $expectedSeq);
 			}
 			if (!hash_equals(self::computeVoteHash($expectedSeq, $prev, (string) $vote['ciphertext']), (string) $vote['hash'])) {
-				return 'vote '.$expectedSeq.': content does not match its hash';
+				return $langs->trans('VoteChainHashMismatch', $expectedSeq);
 			}
 			$prev = (string) $vote['hash'];
 			$expectedSeq++;
