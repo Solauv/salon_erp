@@ -35,6 +35,12 @@ CREATE TABLE llx_salonerp_campaign(
 	genesis_payload text DEFAULT NULL,
 	date_validation datetime DEFAULT NULL,
 	fk_user_valid integer DEFAULT NULL,
+	-- Lot 3 : cle privee ressaisie par le responsable a la revelation, puis
+	-- affichee a tous (les votes sont alors publics) ; NULL jusque-la.
+	private_key varchar(64) DEFAULT NULL,
+	date_reveal datetime DEFAULT NULL,
+	date_attribution datetime DEFAULT NULL,
+	fk_user_attribution integer DEFAULT NULL,
 	status smallint NOT NULL DEFAULT 0,
 	date_creation datetime NOT NULL,
 	tms timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

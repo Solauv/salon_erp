@@ -134,6 +134,44 @@ CampaignCastVote = Voter
 CampaignVoteRecorded = Vote enregistré. Téléchargez le nouveau fichier des votes : il contient votre vote.
 
 #
+# Reveal, count and sales reps (lot 3)
+#
+CampaignStatusRevealed = Révélée
+CampaignDateReveal = Date de révélation
+CampaignDateAttribution = Commerciaux attribués le
+CampaignUserAttribution = Commerciaux attribués par
+CampaignResultTab = Résultats
+CampaignVoteStateRevealed = Le vote est terminé et les votes ont été révélés : voir l'onglet Résultats.
+CampaignRevealWait = Le vote est terminé. Les votes seront révélés quand le responsable aura ressaisi la clé privée de la campagne.
+CampaignRevealText = Le vote est terminé. Ressaisissez la clé privée de la campagne pour révéler les votes : la chaîne est entièrement revérifiée, chaque vote est déchiffré, puis le résultat est calculé et figé. La clé est alors enregistrée et affichée à tous : les votes deviennent publics.
+CampaignReveal = Révéler les votes
+CampaignRevealed = Votes révélés et résultats calculés.
+CampaignLastHash = Empreinte finale de la chaîne
+CampaignKeyNowPublic = Les votes étant révélés, la clé privée est désormais publique : chacun peut déchiffrer son fichier des votes et constater que les votes affichés ici sont bien ceux de la chaîne.
+CampaignAttributedOn = Commerciaux attribués le %s par %s.
+CampaignAttribute = Attribuer les commerciaux
+CampaignAttributeConfirm = Chaque gagnant sera ajouté comme commercial du tiers qu'il a remporté, sans retirer les commerciaux déjà en place. Cette opération ne se fait qu'une fois. Confirmez-vous ?
+CampaignNotAttributedYet = Les commerciaux n'ont pas encore été attribués par le responsable.
+CampaignAttributionDone = Commerciaux attribués : %s ajouté(s), %s déjà en place, %s tiers supprimé(s) ignoré(s).
+CampaignOnlyMine = Uniquement les tiers que j'ai remportés
+CampaignResults = Résultats
+CampaignWinner = Gagnant
+CampaignBidsReceived = Votes reçus
+CampaignNoBid = Aucun vote
+CampaignDecidedBy = Tranché par
+CampaignCalculation = Calcul
+CampaignNobody = Personne
+CampaignRule_none = Aucun point
+CampaignRule_max = Plus forte mise
+CampaignRule_B = Égalité : part de l'enveloppe (B)
+CampaignRule_E = Égalité : tirage vérifiable (E)
+CampaignDrawFormula = Tirage : sha256(empreinte finale:%s:id du votant) ; la plus petite empreinte l'emporte.
+CampaignBallots = Votes
+CampaignSeq = N°
+CampaignVoter = Votant
+CampaignDistribution = Répartition
+
+#
 # Tie-break rule, fixed at validation and part of the genesis hash
 #
 CampaignTieRuleTitle = Règle d'égalité
@@ -183,3 +221,12 @@ ErrorCampaignVoteInvalidPoints = Les points doivent être des nombres entiers po
 ErrorCampaignVoteTotalMismatch = Vous avez réparti %s points sur une enveloppe de %s : il faut répartir exactement la totalité.
 ErrorCampaignVoteDownloadFirst = Téléchargez d'abord le fichier des votes.
 ErrorCampaignVoteNotConfirmed = Tapez « %s » pour confirmer votre vote.
+ErrorCampaignAlreadyRevealed = Les votes de cette campagne ont déjà été révélés.
+ErrorCampaignRevealNotEnded = Les votes ne peuvent être révélés qu'une fois le vote terminé.
+ErrorCampaignOnlyCreatorCanReveal = Seul le responsable de la campagne peut révéler les votes.
+ErrorCampaignChainBroken = La chaîne des votes est altérée (%s) : révélation refusée, rien n'a été modifié.
+ErrorCampaignBallotUnreadable = Le vote n°%s ne peut pas être déchiffré : révélation refusée, rien n'a été modifié.
+ErrorCampaignBallotMismatch = Le vote n°%s ne correspond pas à son enregistrement : révélation refusée, rien n'a été modifié.
+ErrorCampaignNotRevealed = Les votes de cette campagne n'ont pas encore été révélés.
+ErrorCampaignOnlyCreatorCanAttribute = Seul le responsable de la campagne peut attribuer les commerciaux.
+ErrorCampaignAlreadyAttributed = Les commerciaux de cette campagne ont déjà été attribués.

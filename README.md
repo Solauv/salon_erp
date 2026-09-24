@@ -34,8 +34,18 @@ tag donné.
   groupe) et tous les votes, chiffrés et chaînés, sans aucune identité en clair. Chacun
   peut y revérifier la chaîne, en cas de désaccord ou de contrôle.
 
-Les lots suivants ajouteront la clôture et le dépouillement, puis un onglet de
-déchiffrement.
+- Révélation (onglet « Résultats »), après la date de fin : le responsable ressaisit sa
+  clé privée. La chaîne est entièrement revérifiée et chaque vote est rapproché de son
+  enregistrement avant tout déchiffrement ; au moindre écart, rien n'est modifié. La clé
+  est ensuite enregistrée et affichée à tous : les votes deviennent publics.
+- Dépouillement figé : pour chaque tiers, le votant qui y a misé le plus l'emporte ; un
+  tiers sans point n'est attribué à personne. Égalités : plus forte part de son enveloppe,
+  puis tirage vérifiable dérivé de l'empreinte finale de la chaîne. Chaque résultat
+  affiche les votes reçus, la règle qui a tranché et son calcul.
+- Attribution des commerciaux, une seule fois, par le responsable : chaque gagnant est
+  ajouté comme commercial du tiers remporté, sans retirer les commerciaux en place.
+
+Un prochain lot ajoutera un onglet de déchiffrement des fichiers de votes.
 
 ## Prérequis
 
@@ -51,8 +61,9 @@ déchiffrement.
 2. Se connecter en tant qu'administrateur, aller dans **Configuration > Modules**.
 3. Repérer le module **Votes** (famille CRM) et l'activer.
 
-Le module crée quatre tables (`llx_salonerp_campaign`, `llx_salonerp_campaign_voter`,
-`llx_salonerp_campaign_thirdparty` et `llx_salonerp_campaign_vote`)
+Le module crée cinq tables (`llx_salonerp_campaign`, `llx_salonerp_campaign_voter`,
+`llx_salonerp_campaign_thirdparty`, `llx_salonerp_campaign_vote` et
+`llx_salonerp_campaign_result`)
 et trois permissions (lire, créer/modifier/valider, supprimer les campagnes) à
 accorder aux utilisateurs concernés dans **Configuration > Utilisateurs & groupes**.
 

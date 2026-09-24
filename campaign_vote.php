@@ -216,6 +216,8 @@ if ($status === Campaign::STATUS_VALIDATED) {
 	$stateText = $langs->trans('CampaignVoteStateOpen', $end);
 } elseif ($status === Campaign::STATUS_ENDED) {
 	$stateText = $langs->trans('CampaignVoteStateEnded', $end);
+} elseif ($status === Campaign::STATUS_REVEALED) {
+	$stateText = $langs->trans('CampaignVoteStateRevealed');
 } elseif ($status === Campaign::STATUS_EXTINCT) {
 	$stateText = $langs->trans('CampaignVoteStateExtinct', $end);
 } else {

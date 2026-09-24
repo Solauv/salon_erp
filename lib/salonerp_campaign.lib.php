@@ -26,7 +26,7 @@
  */
 
 /**
- * Prepare array of tabs for Campaign: card, notes and, once validated, vote.
+ * Prepare array of tabs for Campaign: card, notes, vote once validated, results once ended.
  *
  * @param	Campaign	$object					Campaign
  * @return 	array<array{string,string,string}>	Array of tabs
@@ -66,6 +66,14 @@ function campaignPrepareHead($object)
 		$head[$h][0] = dolBuildUrl(dol_buildpath("/salonerp/campaign_vote.php", 1), array('id' => $object->id));
 		$head[$h][1] = $langs->trans('CampaignVoteTab');
 		$head[$h][2] = 'vote';
+		$h++;
+	}
+
+	// Results: once the vote has ended (reveal form), then the count.
+	if (in_array((int) $object->status, array(Campaign::STATUS_ENDED, Campaign::STATUS_REVEALED), true)) {
+		$head[$h][0] = dolBuildUrl(dol_buildpath("/salonerp/campaign_result.php", 1), array('id' => $object->id));
+		$head[$h][1] = $langs->trans('CampaignResultTab');
+		$head[$h][2] = 'result';
 		$h++;
 	}
 

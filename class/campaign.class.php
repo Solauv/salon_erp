@@ -92,7 +92,7 @@ class Campaign extends CommonObject
 	const STATUS_VOTE_OPEN = 2;
 	/** date_end reached with the vote open: waits for the reveal (lot 3). */
 	const STATUS_ENDED = 3;
-	/** Reserved for lot 3. */
+	/** Votes decrypted and counted, private key stored and public. */
 	const STATUS_REVEALED = 4;
 	/** date_end reached before the creator voted: no vote at all, deletable. */
 	const STATUS_EXTINCT = 8;
@@ -128,7 +128,11 @@ class Campaign extends CommonObject
 		"genesis_payload" => array("type" => "text", "label" => "GenesisPayload", "enabled" => "1", 'position' => 73, 'notnull' => 0, "visible" => "0", "noteditable" => 1, "cssview" => "wordbreak"),
 		"date_validation" => array("type" => "datetime", "label" => "DateValidation", "enabled" => "1", 'position' => 80, 'notnull' => 0, "visible" => "-3", "noteditable" => 1),
 		"fk_user_valid" => array("type" => "integer:User:user/class/user.class.php", "label" => "UserValidation", "picto" => "user", "enabled" => "1", 'position' => 81, 'notnull' => 0, "visible" => "-3", "noteditable" => 1),
-		"status" => array("type" => "integer", "label" => "Status", "enabled" => "1", 'position' => 90, 'notnull' => 1, "visible" => "1", "index" => 1, "arrayofkeyval" => array("0" => "Draft", "1" => "Validated"), "default" => "0"),
+		"private_key" => array("type" => "varchar(64)", "label" => "PrivateKeyLabel", "enabled" => "1", 'position' => 82, 'notnull' => 0, "visible" => "0", "noteditable" => 1),
+		"date_reveal" => array("type" => "datetime", "label" => "CampaignDateReveal", "enabled" => "1", 'position' => 83, 'notnull' => 0, "visible" => "-3", "noteditable" => 1),
+		"date_attribution" => array("type" => "datetime", "label" => "CampaignDateAttribution", "enabled" => "1", 'position' => 84, 'notnull' => 0, "visible" => "-3", "noteditable" => 1),
+		"fk_user_attribution" => array("type" => "integer:User:user/class/user.class.php", "label" => "CampaignUserAttribution", "picto" => "user", "enabled" => "1", 'position' => 85, 'notnull' => 0, "visible" => "0", "noteditable" => 1),
+		"status" => array("type" => "integer", "label" => "Status", "enabled" => "1", 'position' => 90, 'notnull' => 1, "visible" => "1", "index" => 1, "arrayofkeyval" => array("0" => "Draft", "1" => "Validated", "2" => "CampaignStatusVoteOpen", "3" => "CampaignStatusEnded", "4" => "CampaignStatusRevealed", "8" => "CampaignStatusExtinct"), "default" => "0"),
 		"date_creation" => array("type" => "datetime", "label" => "DateCreation", "enabled" => "1", 'position' => 500, 'notnull' => 1, "visible" => "-2"),
 		"tms" => array("type" => "timestamp", "label" => "DateModification", "enabled" => "1", 'position' => 501, 'notnull' => 0, "visible" => "-2"),
 		"fk_user_creat" => array("type" => "integer:User:user/class/user.class.php", "label" => "Manager", "picto" => "user", "enabled" => "1", 'position' => 510, 'notnull' => 1, "visible" => "-2", "csslist" => "tdoverflowmax150", "help" => "CampaignManagerHelp"),
@@ -167,6 +171,14 @@ class Campaign extends CommonObject
 	public $date_validation;
 	/** @var ?int */
 	public $fk_user_valid;
+	/** @var ?string Base64 private key, stored at the reveal (then public, shown to all), null before */
+	public $private_key;
+	/** @var ?int Unix timestamp of the reveal */
+	public $date_reveal;
+	/** @var ?int Unix timestamp of the sales reps attribution */
+	public $date_attribution;
+	/** @var ?int */
+	public $fk_user_attribution;
 	/** @var int */
 	public $status;
 	public $date_creation;
@@ -1566,6 +1578,360 @@ class Campaign extends CommonObject
 	}
 
 	/**
+	 * Count the votes: for each thirdparty of the frozen list, the voter who
+	 * put the most points on it wins. Pure function, no database access, so
+	 * anyone can check it from the revealed ballots.
+	 *
+	 * Ties, rule B_E fixed in the genesis:
+	 *  - B: the tied voter who gave it the largest share of their own envelope
+	 *    (points / envelope) wins, compared exactly as a1*e2 vs a2*e1;
+	 *  - E: if still tied, verifiable draw: each remaining voter gets
+	 *    sha256(lastHash . ':' . thirdparty id . ':' . voter id), the smallest
+	 *    hash (hex string order) wins. lastHash is the hash of the last vote of
+	 *    the chain: it did not exist before the vote closed.
+	 * A thirdparty that got no point at all goes to nobody (rule 'none').
+	 *
+	 * @param	array<array{fk_user:int,points:array<array{0:int,1:int}>}>	$ballots		Decrypted ballots
+	 * @param	array<int,int>		$envelopes		Voters' envelopes, keyed by user id
+	 * @param	int[]				$thirdpartyIds	The frozen thirdparty list
+	 * @param	string				$lastHash		Hash of the last vote of the chain
+	 * @return	array<int,array{fk_user:?int,points:int,rule:string,detail:array<string,mixed>}>	Keyed by thirdparty id, sorted
+	 */
+	public static function computeResults(array $ballots, array $envelopes, array $thirdpartyIds, string $lastHash): array
+	{
+		$bids = array();
+		foreach ($ballots as $ballot) {
+			foreach ($ballot['points'] as $pair) {
+				if ((int) $pair[1] > 0) {
+					$bids[(int) $pair[0]][(int) $ballot['fk_user']] = (int) $pair[1];
+				}
+			}
+		}
+
+		$results = array();
+		$ids = array_map('intval', $thirdpartyIds);
+		sort($ids);
+		foreach ($ids as $socId) {
+			$candidates = isset($bids[$socId]) ? $bids[$socId] : array();
+			ksort($candidates);
+			$detail = array('bids' => array());
+			foreach ($candidates as $userId => $points) {
+				$detail['bids'][] = array('fk_user' => $userId, 'points' => $points, 'envelope' => (int) $envelopes[$userId]);
+			}
+			if (empty($candidates)) {
+				$results[$socId] = array('fk_user' => null, 'points' => 0, 'rule' => 'none', 'detail' => $detail);
+				continue;
+			}
+
+			$max = max($candidates);
+			$tied = array_keys(array_filter($candidates, function ($p) use ($max) {
+				return $p === $max;
+			}));
+			if (count($tied) === 1) {
+				$results[$socId] = array('fk_user' => $tied[0], 'points' => $max, 'rule' => 'max', 'detail' => $detail);
+				continue;
+			}
+
+			// B: largest share of own envelope, exact integer comparison.
+			$best = array();
+			foreach ($tied as $userId) {
+				if (empty($best)) {
+					$best = array($userId);
+					continue;
+				}
+				$ref = $best[0];
+				$cmp = ($candidates[$userId] * (int) $envelopes[$ref]) <=> ($candidates[$ref] * (int) $envelopes[$userId]);
+				if ($cmp > 0) {
+					$best = array($userId);
+				} elseif ($cmp === 0) {
+					$best[] = $userId;
+				}
+			}
+			$detail['tied'] = $tied;
+			if (count($best) === 1) {
+				$results[$socId] = array('fk_user' => $best[0], 'points' => $max, 'rule' => 'B', 'detail' => $detail);
+				continue;
+			}
+
+			// E: verifiable draw among the voters still tied after B.
+			$draw = array();
+			foreach ($best as $userId) {
+				$draw[$userId] = hash('sha256', $lastHash.':'.$socId.':'.$userId);
+			}
+			asort($draw, SORT_STRING);
+			$detail['draw'] = array('seed' => $lastHash, 'hashes' => $draw);
+			$results[$socId] = array('fk_user' => (int) array_key_first($draw), 'points' => $max, 'rule' => 'E', 'detail' => $detail);
+		}
+
+		return $results;
+	}
+
+	/**
+	 * Open every sealed ballot of the chain with a private key, and check each
+	 * one against its database row: same rank, same voter, same campaign.
+	 *
+	 * @param	string	$privateKeyB64	Base64 private key of the campaign
+	 * @return	array<array{seq:int,fk_user:int,date:string,points:array<array{0:int,1:int}>}>|int<-1,-1>	Ballots by seq, or -1 (reason in ->error)
+	 */
+	protected function openBallots(string $privateKeyB64)
+	{
+		global $langs;
+
+		$sql = "SELECT seq, fk_user, ciphertext FROM ".$this->db->prefix()."salonerp_campaign_vote";
+		$sql .= " WHERE fk_campaign = ".((int) $this->id)." ORDER BY seq ASC";
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			$this->error = $this->db->lasterror();
+			return -1;
+		}
+
+		$keypair = sodium_crypto_box_keypair_from_secretkey_and_publickey((string) base64_decode($privateKeyB64, true), (string) base64_decode((string) $this->public_key, true));
+		$ballots = array();
+		$error = '';
+		while ($obj = $this->db->fetch_object($resql)) {
+			$plain = sodium_crypto_box_seal_open((string) base64_decode((string) $obj->ciphertext, true), $keypair);
+			$ballot = ($plain === false) ? null : json_decode($plain, true);
+			if (!is_array($ballot)) {
+				$error = $langs->trans('ErrorCampaignBallotUnreadable', (int) $obj->seq);
+				break;
+			}
+			if ((int) $ballot['seq'] !== (int) $obj->seq || (int) $ballot['fk_user'] !== (int) $obj->fk_user || (string) $ballot['campaign'] !== (string) $this->ref) {
+				$error = $langs->trans('ErrorCampaignBallotMismatch', (int) $obj->seq);
+				break;
+			}
+			$ballots[] = array('seq' => (int) $obj->seq, 'fk_user' => (int) $ballot['fk_user'], 'date' => (string) $ballot['date'], 'points' => $ballot['points']);
+		}
+		$this->db->free($resql);
+		sodium_memzero($keypair);
+
+		if ($error !== '') {
+			$this->error = $error;
+			return -1;
+		}
+
+		return $ballots;
+	}
+
+	/**
+	 * The revealed ballots, opened with the stored private key. Only once the
+	 * campaign is revealed: before that no key is stored.
+	 *
+	 * @return	array<array{seq:int,fk_user:int,date:string,points:array<array{0:int,1:int}>}>|int<-1,-1>	Ballots by seq, or -1
+	 */
+	public function fetchBallots()
+	{
+		if ((int) $this->status !== self::STATUS_REVEALED || empty($this->private_key)) {
+			return -1;
+		}
+
+		return $this->openBallots((string) $this->private_key);
+	}
+
+	/**
+	 * The frozen results of the count.
+	 *
+	 * @return	array<int,array{fk_user:?int,points:int,rule:string,detail:array<string,mixed>}>|int<-1,-1>	Keyed by thirdparty id, or -1
+	 */
+	public function fetchResults()
+	{
+		$sql = "SELECT fk_soc, fk_user, points, rule, detail FROM ".$this->db->prefix()."salonerp_campaign_result";
+		$sql .= " WHERE fk_campaign = ".((int) $this->id)." ORDER BY fk_soc ASC";
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			$this->error = $this->db->lasterror();
+			return -1;
+		}
+		$results = array();
+		while ($obj = $this->db->fetch_object($resql)) {
+			$results[(int) $obj->fk_soc] = array(
+				'fk_user' => $obj->fk_user === null ? null : (int) $obj->fk_user,
+				'points' => (int) $obj->points,
+				'rule' => (string) $obj->rule,
+				'detail' => (array) json_decode((string) $obj->detail, true),
+			);
+		}
+		$this->db->free($resql);
+
+		return $results;
+	}
+
+	/**
+	 * Reveal the votes, after date_end, by the creator re-entering the private
+	 * key. Under the campaign lock: the key is checked, then the WHOLE chain is
+	 * verified from the genesis before anything is decrypted, then every
+	 * ballot is opened and checked against its row. Only if all of this holds
+	 * are the results counted and frozen, and the key stored (it is public from
+	 * then on). Any failure leaves the campaign untouched.
+	 *
+	 * @param	User	$user			The campaign creator
+	 * @param	string	$privateKeyB64	Base64 private key
+	 * @return	int<-1,1>				Return integer <0 if KO (translated messages in ->errors), >0 if OK
+	 */
+	public function reveal(User $user, string $privateKeyB64)
+	{
+		global $langs;
+
+		$langs->load('salonerp@salonerp');
+		dol_include_once('/salonerp/class/campaignvoter.class.php');
+		$this->errors = array();
+
+		$this->db->begin();
+
+		$status = $this->lockAndFetchStatus();
+		if ($status === self::STATUS_REVEALED) {
+			$this->errors[] = $langs->trans('ErrorCampaignAlreadyRevealed');
+		} elseif ($status !== self::STATUS_ENDED) {
+			$this->errors[] = $langs->trans('ErrorCampaignRevealNotEnded');
+		} elseif ((int) $user->id !== (int) $this->fk_user_creat) {
+			$this->errors[] = $langs->trans('ErrorCampaignOnlyCreatorCanReveal');
+		} elseif (!self::checkPrivateKey($privateKeyB64, (string) $this->public_key)) {
+			$this->errors[] = $langs->trans('ErrorCampaignPrivateKeyMismatch');
+		}
+		if (!empty($this->errors)) {
+			$this->db->rollback();
+			return -1;
+		}
+
+		$votes = $this->fetchVotes();
+		$chainError = is_array($votes) ? self::verifyChain((string) $this->genesis_payload, (string) $this->genesis_hash, $votes) : $this->error;
+		if ($chainError !== '') {
+			$this->errors[] = $langs->trans('ErrorCampaignChainBroken', $chainError);
+			$this->db->rollback();
+			return -1;
+		}
+
+		$ballots = $this->openBallots($privateKeyB64);
+		if (!is_array($ballots)) {
+			$this->errors[] = $this->error;
+			$this->db->rollback();
+			return -1;
+		}
+
+		$voterObj = new CampaignVoter($this->db);
+		$envelopes = array();
+		foreach ((array) $voterObj->fetchByCampaign($this->id) as $userId => $v) {
+			$envelopes[(int) $userId] = (int) $v->points;
+		}
+		$lastHash = empty($votes) ? (string) $this->genesis_hash : $votes[count($votes) - 1]['hash'];
+		$results = self::computeResults($ballots, $envelopes, (array) $this->fetchThirdpartyIds(), $lastHash);
+
+		foreach ($results as $socId => $r) {
+			$sql = "INSERT INTO ".$this->db->prefix()."salonerp_campaign_result (fk_campaign, fk_soc, fk_user, points, rule, detail) VALUES (";
+			$sql .= ((int) $this->id).", ".((int) $socId).", ".($r['fk_user'] === null ? "NULL" : (int) $r['fk_user']);
+			$sql .= ", ".((int) $r['points']).", '".$this->db->escape($r['rule'])."'";
+			$sql .= ", '".$this->db->escape(json_encode($r['detail'], JSON_UNESCAPED_SLASHES))."')";
+			if (!$this->db->query($sql)) {
+				$this->errors[] = $this->db->lasterror();
+				$this->db->rollback();
+				return -1;
+			}
+		}
+
+		$now = dol_now();
+		$sql = "UPDATE ".$this->db->prefix().$this->table_element;
+		$sql .= " SET status = ".self::STATUS_REVEALED;
+		$sql .= ", private_key = '".$this->db->escape($privateKeyB64)."'";
+		$sql .= ", date_reveal = '".$this->db->idate($now)."'";
+		$sql .= " WHERE rowid = ".((int) $this->id)." AND status = ".self::STATUS_ENDED;
+		if (!$this->db->query($sql)) {
+			$this->errors[] = $this->db->lasterror();
+			$this->db->rollback();
+			return -1;
+		}
+
+		$this->db->commit();
+
+		$this->status = self::STATUS_REVEALED;
+		$this->private_key = $privateKeyB64;
+		$this->date_reveal = $now;
+
+		return 1;
+	}
+
+	/**
+	 * Add each thirdparty's winner as one of its sales representatives, once,
+	 * by the creator, after the reveal. Nobody is removed: the existing
+	 * representatives stay. Thirdparties deleted since the validation are
+	 * skipped. All-or-nothing.
+	 *
+	 * @param	User	$user	The campaign creator
+	 * @return	array{added:array<int,int>,already:array<int,int>,skipped:array<int,int>}|int<-1,-1>	Report (thirdparty id => winner id), or -1 (translated messages in ->errors)
+	 */
+	public function attributeSalesReps(User $user)
+	{
+		global $langs;
+
+		$langs->load('salonerp@salonerp');
+		require_once DOL_DOCUMENT_ROOT.'/societe/class/societe.class.php';
+		$this->errors = array();
+
+		$this->db->begin();
+
+		if ($this->lockAndFetchStatus() !== self::STATUS_REVEALED) {
+			$this->errors[] = $langs->trans('ErrorCampaignNotRevealed');
+		} elseif ((int) $user->id !== (int) $this->fk_user_creat) {
+			$this->errors[] = $langs->trans('ErrorCampaignOnlyCreatorCanAttribute');
+		} else {
+			$sql = "SELECT date_attribution FROM ".$this->db->prefix().$this->table_element." WHERE rowid = ".((int) $this->id);
+			$resql = $this->db->query($sql);
+			$obj = $resql ? $this->db->fetch_object($resql) : null;
+			if (!$obj || !empty($obj->date_attribution)) {
+				$this->errors[] = $langs->trans('ErrorCampaignAlreadyAttributed');
+			}
+		}
+		$results = empty($this->errors) ? $this->fetchResults() : array();
+		if (!is_array($results)) {
+			$this->errors[] = $this->error;
+		}
+		if (!empty($this->errors)) {
+			$this->db->rollback();
+			return -1;
+		}
+
+		$report = array('added' => array(), 'already' => array(), 'skipped' => array());
+		foreach ($results as $socId => $r) {
+			if ($r['fk_user'] === null) {
+				continue;
+			}
+			$soc = new Societe($this->db);
+			if ($soc->fetch($socId) <= 0) {
+				$report['skipped'][$socId] = $r['fk_user'];
+				continue;
+			}
+			$sql = "SELECT COUNT(*) as nb FROM ".$this->db->prefix()."societe_commerciaux";
+			$sql .= " WHERE fk_soc = ".((int) $socId)." AND fk_user = ".((int) $r['fk_user']);
+			$resql = $this->db->query($sql);
+			$obj = $resql ? $this->db->fetch_object($resql) : null;
+			if ($obj && (int) $obj->nb > 0) {
+				$report['already'][$socId] = $r['fk_user'];
+				continue;
+			}
+			if ($soc->add_commercial($user, $r['fk_user']) < 0) {
+				$this->errors[] = $soc->error;
+				$this->db->rollback();
+				return -1;
+			}
+			$report['added'][$socId] = $r['fk_user'];
+		}
+
+		$now = dol_now();
+		$sql = "UPDATE ".$this->db->prefix().$this->table_element;
+		$sql .= " SET date_attribution = '".$this->db->idate($now)."', fk_user_attribution = ".((int) $user->id);
+		$sql .= " WHERE rowid = ".((int) $this->id);
+		if (!$this->db->query($sql)) {
+			$this->errors[] = $this->db->lasterror();
+			$this->db->rollback();
+			return -1;
+		}
+
+		$this->db->commit();
+		$this->date_attribution = $now;
+		$this->fk_user_attribution = (int) $user->id;
+
+		return $report;
+	}
+
+	/**
 	 * Output a field value for display. Overrides the fields the generic
 	 * renderer shows badly:
 	 *  - fk_category: Categorie::getNomUrl() forces a white text, meant to sit
@@ -1666,6 +2032,7 @@ class Campaign extends CommonObject
 				self::STATUS_VALIDATED => 'Validated',
 				self::STATUS_VOTE_OPEN => 'CampaignStatusVoteOpen',
 				self::STATUS_ENDED => 'CampaignStatusEnded',
+				self::STATUS_REVEALED => 'CampaignStatusRevealed',
 				self::STATUS_EXTINCT => 'CampaignStatusExtinct',
 			) as $code => $key) {
 				$this->labelStatus[$code] = $langs->transnoentitiesnoconv($key);
@@ -1678,6 +2045,7 @@ class Campaign extends CommonObject
 			self::STATUS_VALIDATED => 'status1',
 			self::STATUS_VOTE_OPEN => 'status4',
 			self::STATUS_ENDED => 'status6',
+			self::STATUS_REVEALED => 'status4',
 			self::STATUS_EXTINCT => 'status9',
 		);
 		$statusType = isset($statusTypes[$status]) ? $statusTypes[$status] : 'status'.$status;

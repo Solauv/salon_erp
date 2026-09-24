@@ -134,6 +134,44 @@ CampaignCastVote = Vote
 CampaignVoteRecorded = Vote recorded. Download the new vote file: it holds your vote.
 
 #
+# Reveal, count and sales reps (lot 3)
+#
+CampaignStatusRevealed = Revealed
+CampaignDateReveal = Reveal date
+CampaignDateAttribution = Sales reps assigned on
+CampaignUserAttribution = Sales reps assigned by
+CampaignResultTab = Results
+CampaignVoteStateRevealed = The vote is over and the votes have been revealed: see the Results tab.
+CampaignRevealWait = The vote is over. The votes will be revealed once the manager has re-entered the campaign private key.
+CampaignRevealText = The vote is over. Re-enter the campaign private key to reveal the votes: the chain is fully checked again, each vote is decrypted, then the result is counted and frozen. The key is then stored and shown to everyone: the votes become public.
+CampaignReveal = Reveal the votes
+CampaignRevealed = Votes revealed and results counted.
+CampaignLastHash = Final hash of the chain
+CampaignKeyNowPublic = The votes being revealed, the private key is now public: anyone can decrypt their vote file and check that the votes shown here are those of the chain.
+CampaignAttributedOn = Sales reps assigned on %s by %s.
+CampaignAttribute = Assign sales reps
+CampaignAttributeConfirm = Each winner will be added as a sales rep of the thirdparty they won, without removing the sales reps already in place. This is done only once. Do you confirm?
+CampaignNotAttributedYet = The manager has not assigned the sales reps yet.
+CampaignAttributionDone = Sales reps assigned: %s added, %s already in place, %s deleted thirdparty(ies) skipped.
+CampaignOnlyMine = Only thirdparties I won
+CampaignResults = Results
+CampaignWinner = Winner
+CampaignBidsReceived = Bids received
+CampaignNoBid = No bid
+CampaignDecidedBy = Decided by
+CampaignCalculation = Calculation
+CampaignNobody = Nobody
+CampaignRule_none = No point
+CampaignRule_max = Highest bid
+CampaignRule_B = Tie: share of envelope (B)
+CampaignRule_E = Tie: verifiable draw (E)
+CampaignDrawFormula = Draw: sha256(final hash:%s:voter id); the smallest hash wins.
+CampaignBallots = Votes
+CampaignSeq = #
+CampaignVoter = Voter
+CampaignDistribution = Distribution
+
+#
 # Tie-break rule, fixed at validation and part of the genesis hash
 #
 CampaignTieRuleTitle = Tie-break rule
@@ -183,3 +221,12 @@ ErrorCampaignVoteInvalidPoints = Points must be whole numbers, zero or more.
 ErrorCampaignVoteTotalMismatch = You shared out %s points of a %s point envelope: the whole envelope must be shared out exactly.
 ErrorCampaignVoteDownloadFirst = Download the vote file first.
 ErrorCampaignVoteNotConfirmed = Type "%s" to confirm your vote.
+ErrorCampaignAlreadyRevealed = The votes of this campaign have already been revealed.
+ErrorCampaignRevealNotEnded = The votes can only be revealed once the vote is over.
+ErrorCampaignOnlyCreatorCanReveal = Only the campaign manager can reveal the votes.
+ErrorCampaignChainBroken = The vote chain has been altered (%s): reveal refused, nothing was changed.
+ErrorCampaignBallotUnreadable = Vote #%s cannot be decrypted: reveal refused, nothing was changed.
+ErrorCampaignBallotMismatch = Vote #%s does not match its record: reveal refused, nothing was changed.
+ErrorCampaignNotRevealed = The votes of this campaign have not been revealed yet.
+ErrorCampaignOnlyCreatorCanAttribute = Only the campaign manager can assign the sales reps.
+ErrorCampaignAlreadyAttributed = The sales reps of this campaign have already been assigned.
