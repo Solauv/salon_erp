@@ -99,6 +99,41 @@ DownloadPrivateKey = Télécharger (.key)
 DeleteCampaign = Supprimer la campagne
 
 #
+# Vote (lot 2)
+#
+CampaignStatusVoteOpen = Vote ouvert
+CampaignStatusEnded = Vote terminé
+CampaignStatusExtinct = Éteinte
+CampaignVoteTab = Voter
+CampaignVotesRecorded = Votes enregistrés
+CampaignYourEnvelope = Votre enveloppe (points)
+CampaignYourVote = Votre vote
+CampaignYouVotedOn = Vous avez voté le %s
+CampaignYouHaveNotVoted = Vous n'avez pas encore voté
+CampaignNotAVoterText = Vous ne faites pas partie des votants de cette campagne.
+CampaignVotedText = Votre vote est enregistré et chiffré : personne ne peut le lire avant le dépouillement. Téléchargez le fichier des votes pour garder la preuve qu'il figure dans la chaîne.
+CampaignDownloadVoteFile = Télécharger le fichier des votes
+CampaignVoteStateNotStarted = Le vote est ouvert du %s au %s. Le responsable vote en premier : c'est son vote qui ouvre la campagne aux autres votants.
+CampaignVoteStateCreatorFirst = Vous êtes le responsable : votez en premier, avec votre clé privée, pour ouvrir le vote aux autres votants. Sans votre vote avant le %s, la campagne s'éteindra.
+CampaignVoteStateWaitCreator = Le vote n'est pas encore ouvert : le responsable doit voter en premier. Sans son vote avant le %s, la campagne s'éteindra.
+CampaignVoteStateOpen = Le vote est ouvert jusqu'au %s.
+CampaignVoteStateEnded = Le vote est terminé depuis le %s. Les points des votants qui n'ont pas voté sont perdus. Le dépouillement viendra ensuite.
+CampaignVoteStateExtinct = Campagne éteinte : le responsable n'a pas voté avant le %s. Aucun vote n'a eu lieu ; la campagne peut être supprimée.
+CampaignVoteStep1 = 1. Télécharger le fichier des votes
+CampaignVoteStep1Text = Le fichier contient la genèse de la campagne (votants, points, tiers d'origine) et tous les votes émis à ce jour, chiffrés et chaînés, sans aucun nom. Conservez-le : en cas de désaccord ou de contrôle, il permet de vérifier que rien n'a été modifié.
+CampaignVoteStep2 = 2. Répartir vos points
+CampaignVoteStep2Text = Répartissez la totalité de vos %s points entre les tiers ci-dessous : le vote n'est accepté que si le compte tombe juste.
+CampaignPointsLeft = Points restant à répartir
+CampaignOnlySelected = Uniquement les tiers sélectionnés
+CampaignVoteStep3 = 3. Confirmer
+CampaignVoteFinalWarning = Vote définitif : une fois enregistré, votre vote ne peut plus être modifié ni annulé.
+CampaignCreatorKeyText = Premier vote de la campagne : saisissez la clé privée remise à la validation. Elle est vérifiée puis oubliée, jamais enregistrée.
+CampaignVoteTypeConfirm = Pour confirmer, tapez « %s » :
+CampaignVoteConfirmWord = confirmer
+CampaignCastVote = Voter
+CampaignVoteRecorded = Vote enregistré. Téléchargez le nouveau fichier des votes : il contient votre vote.
+
+#
 # Tie-break rule, fixed at validation and part of the genesis hash
 #
 CampaignTieRuleTitle = Règle d'égalité
@@ -117,7 +152,7 @@ PermissionDeleteCampaign = Supprimer les campagnes
 #
 ErrorCampaignNotDraft = La campagne n'est plus à l'état brouillon.
 ErrorCampaignNotDraftCannotBeModified = La campagne est validée : elle ne peut plus être modifiée.
-ErrorCampaignNotDraftCannotBeDeleted = Seule une campagne en brouillon peut être supprimée.
+ErrorCampaignNotDraftCannotBeDeleted = Seule une campagne en brouillon ou éteinte peut être supprimée.
 ErrorCampaignOnlyCreatorCanValidate = Seul le créateur de la campagne peut la valider.
 ErrorCampaignDateEndBeforeStart = La date de fin doit être postérieure à la date de début.
 ErrorCampaignDateEndInPast = La date de fin doit être postérieure à la date et l'heure actuelles.
@@ -137,3 +172,14 @@ ErrorCampaignVoterMissingKeys = Votant invalide : campagne ou utilisateur manqua
 ErrorCampaignGenesisPayloadEncoding = Erreur interne : le contenu de la genèse n'a pas pu être encodé.
 ErrorCampaignValidationWriteFailed = La validation n'a pas pu être enregistrée en base : rien n'a été modifié.
 ErrorSalonerpSodiumExtensionMissing = L'extension PHP sodium est requise par ce module (génération de la paire de clés de campagne) et est absente sur ce serveur.
+ErrorCampaignVoteNotOpen = Le vote n'est pas ouvert sur cette campagne.
+ErrorCampaignVoteOutsideWindow = Le vote n'est possible que du %s au %s.
+ErrorCampaignNotAVoter = Vous ne faites pas partie des votants de cette campagne.
+ErrorCampaignAlreadyVoted = Vous avez déjà voté : un vote ne peut être ni modifié ni refait.
+ErrorCampaignCreatorMustVoteFirst = Le responsable de la campagne doit voter en premier.
+ErrorCampaignPrivateKeyMismatch = La clé privée ne correspond pas à la clé publique de la campagne.
+ErrorCampaignVoteUnknownThirdparty = Le tiers n°%s ne fait pas partie de cette campagne.
+ErrorCampaignVoteInvalidPoints = Les points doivent être des nombres entiers positifs ou nuls.
+ErrorCampaignVoteTotalMismatch = Vous avez réparti %s points sur une enveloppe de %s : il faut répartir exactement la totalité.
+ErrorCampaignVoteDownloadFirst = Téléchargez d'abord le fichier des votes.
+ErrorCampaignVoteNotConfirmed = Tapez « %s » pour confirmer votre vote.

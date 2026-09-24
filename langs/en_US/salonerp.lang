@@ -99,6 +99,41 @@ DownloadPrivateKey = Download (.key)
 DeleteCampaign = Delete campaign
 
 #
+# Vote (lot 2)
+#
+CampaignStatusVoteOpen = Vote open
+CampaignStatusEnded = Vote ended
+CampaignStatusExtinct = Extinct
+CampaignVoteTab = Vote
+CampaignVotesRecorded = Votes recorded
+CampaignYourEnvelope = Your envelope (points)
+CampaignYourVote = Your vote
+CampaignYouVotedOn = You voted on %s
+CampaignYouHaveNotVoted = You have not voted yet
+CampaignNotAVoterText = You are not a voter of this campaign.
+CampaignVotedText = Your vote is recorded and encrypted: nobody can read it before the count. Download the vote file to keep proof that it is in the chain.
+CampaignDownloadVoteFile = Download the vote file
+CampaignVoteStateNotStarted = Voting is open from %s to %s. The manager votes first: their vote opens the campaign to the other voters.
+CampaignVoteStateCreatorFirst = You are the manager: vote first, with your private key, to open the vote to the other voters. Without your vote before %s, the campaign will go extinct.
+CampaignVoteStateWaitCreator = The vote is not open yet: the manager must vote first. Without their vote before %s, the campaign will go extinct.
+CampaignVoteStateOpen = The vote is open until %s.
+CampaignVoteStateEnded = The vote ended on %s. Points of voters who did not vote are lost. The count comes next.
+CampaignVoteStateExtinct = Extinct campaign: the manager did not vote before %s. No vote took place; the campaign can be deleted.
+CampaignVoteStep1 = 1. Download the vote file
+CampaignVoteStep1Text = The file holds the campaign genesis (voters, points, original thirdparties) and every vote cast so far, encrypted and chained, without any name. Keep it: in case of dispute or audit, it proves nothing was altered.
+CampaignVoteStep2 = 2. Share out your points
+CampaignVoteStep2Text = Share out all of your %s points across the thirdparties below: the vote is only accepted if the total is exact.
+CampaignPointsLeft = Points left to share out
+CampaignOnlySelected = Selected thirdparties only
+CampaignVoteStep3 = 3. Confirm
+CampaignVoteFinalWarning = Final vote: once recorded, your vote can neither be changed nor cancelled.
+CampaignCreatorKeyText = First vote of the campaign: enter the private key given at validation. It is checked then forgotten, never stored.
+CampaignVoteTypeConfirm = To confirm, type "%s":
+CampaignVoteConfirmWord = confirm
+CampaignCastVote = Vote
+CampaignVoteRecorded = Vote recorded. Download the new vote file: it holds your vote.
+
+#
 # Tie-break rule, fixed at validation and part of the genesis hash
 #
 CampaignTieRuleTitle = Tie-break rule
@@ -117,7 +152,7 @@ PermissionDeleteCampaign = Delete campaigns
 #
 ErrorCampaignNotDraft = The campaign is no longer a draft.
 ErrorCampaignNotDraftCannotBeModified = The campaign is validated: it can no longer be modified.
-ErrorCampaignNotDraftCannotBeDeleted = Only a draft campaign can be deleted.
+ErrorCampaignNotDraftCannotBeDeleted = Only a draft or extinct campaign can be deleted.
 ErrorCampaignOnlyCreatorCanValidate = Only the campaign creator can validate it.
 ErrorCampaignDateEndBeforeStart = The end date must be after the start date.
 ErrorCampaignDateEndInPast = The end date must be after the current date and time.
@@ -137,3 +172,14 @@ ErrorCampaignVoterMissingKeys = Invalid voter: missing campaign or user.
 ErrorCampaignGenesisPayloadEncoding = Internal error: the genesis payload could not be encoded.
 ErrorCampaignValidationWriteFailed = Validation could not be written to the database: nothing was changed.
 ErrorSalonerpSodiumExtensionMissing = The PHP sodium extension is required by this module (campaign keypair generation) and is missing on this server.
+ErrorCampaignVoteNotOpen = The vote is not open on this campaign.
+ErrorCampaignVoteOutsideWindow = Voting is only possible from %s to %s.
+ErrorCampaignNotAVoter = You are not a voter of this campaign.
+ErrorCampaignAlreadyVoted = You already voted: a vote can neither be changed nor cast again.
+ErrorCampaignCreatorMustVoteFirst = The campaign manager must vote first.
+ErrorCampaignPrivateKeyMismatch = The private key does not match the campaign public key.
+ErrorCampaignVoteUnknownThirdparty = Thirdparty #%s is not part of this campaign.
+ErrorCampaignVoteInvalidPoints = Points must be whole numbers, zero or more.
+ErrorCampaignVoteTotalMismatch = You shared out %s points of a %s point envelope: the whole envelope must be shared out exactly.
+ErrorCampaignVoteDownloadFirst = Download the vote file first.
+ErrorCampaignVoteNotConfirmed = Type "%s" to confirm your vote.

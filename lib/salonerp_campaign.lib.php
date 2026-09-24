@@ -26,7 +26,7 @@
  */
 
 /**
- * Prepare array of tabs for Campaign: Fiche + Notes only in this lot.
+ * Prepare array of tabs for Campaign: card, notes and, once validated, vote.
  *
  * @param	Campaign	$object					Campaign
  * @return 	array<array{string,string,string}>	Array of tabs
@@ -60,9 +60,35 @@ function campaignPrepareHead($object)
 	$head[$h][2] = 'note';
 	$h++;
 
+	// The vote tab exists as soon as the campaign is frozen: from then on it
+	// explains who can vote and when, and serves the vote file.
+	if ((int) $object->status !== Campaign::STATUS_DRAFT) {
+		$head[$h][0] = dolBuildUrl(dol_buildpath("/salonerp/campaign_vote.php", 1), array('id' => $object->id));
+		$head[$h][1] = $langs->trans('CampaignVoteTab');
+		$head[$h][2] = 'vote';
+		$h++;
+	}
+
 	// Show more tabs from modules
 	complete_head_from_modules($conf, $langs, $object, $head, $h, 'campaign@salonerp');
 	complete_head_from_modules($conf, $langs, $object, $head, $h, 'campaign@salonerp', 'remove');
 
 	return $head;
+}
+
+/**
+ * Explicit CSRF token check for the mutating actions of the campaign pages
+ * (add, update, delete, sync, save points, validate, vote), verified regardless of
+ * the site's MAIN_SECURITY_CSRF_WITH_TOKEN setting: main.inc.php already
+ * performs a similar check when that option is on, but these actions must
+ * refuse a forged request even when it is off.
+ *
+ * @return bool True if the posted token matches the session's current token
+ */
+function salonerpCheckPostToken()
+{
+	$posted = GETPOST('token', 'alpha');
+	$expected = empty($_SESSION['token']) ? '' : $_SESSION['token'];
+
+	return $posted !== '' && $expected !== '' && hash_equals($expected, $posted);
 }

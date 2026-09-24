@@ -73,23 +73,6 @@ dol_include_once('/salonerp/class/campaign.class.php');
 dol_include_once('/salonerp/class/campaignvoter.class.php');
 dol_include_once('/salonerp/lib/salonerp_campaign.lib.php');
 
-/**
- * Explicit CSRF token check for the mutating actions of this page (add,
- * update, delete, sync, save points, validate), verified here regardless of
- * the site's MAIN_SECURITY_CSRF_WITH_TOKEN setting: main.inc.php already
- * performs a similar check when that option is on, but these actions must
- * refuse a forged request even when it is off.
- *
- * @return bool True if the posted token matches the session's current token
- */
-function salonerpCheckPostToken()
-{
-	$posted = GETPOST('token', 'alpha');
-	$expected = empty($_SESSION['token']) ? '' : $_SESSION['token'];
-
-	return $posted !== '' && $expected !== '' && hash_equals($expected, $posted);
-}
-
 // Load translation files required by the page
 $langs->loadLangs(array("salonerp@salonerp", "categories", "users", "companies"));
 
@@ -109,11 +92,13 @@ $formother = new FormOther($db);
 
 if (($id > 0 || !empty($ref)) && $action != 'add') {
 	$object->fetch($id, $ref);
+	// Past date_end: extinct if the creator never voted, ended otherwise.
+	$object->refreshTimeStatus();
 }
 
 $permissiontoread = $user->hasRight('salonerp', 'campaign', 'read');
 $permissiontoadd = $user->hasRight('salonerp', 'campaign', 'write');
-$permissiontodelete = $user->hasRight('salonerp', 'campaign', 'delete') || ($permissiontoadd && $object->status == Campaign::STATUS_DRAFT);
+$permissiontodelete = $user->hasRight('salonerp', 'campaign', 'delete') || ($permissiontoadd && in_array((int) $object->status, array(Campaign::STATUS_DRAFT, Campaign::STATUS_EXTINCT), true));
 $permissiontovalidate = $permissiontoadd && $object->id > 0 && (int) $user->id === (int) $object->fk_user_creat;
 
 if (!isModEnabled('salonerp')) {
@@ -288,36 +273,10 @@ if (empty($reshook)) {
 	// point value is saved, or none is.
 	if ($action == 'save_voters' && $_SERVER['REQUEST_METHOD'] === 'POST' && salonerpCheckPostToken() && $permissiontoadd && $object->id > 0) {
 		$pointsByUser = GETPOST('points', 'array:int');
-		$voterError = 0;
-		if ($object->status != Campaign::STATUS_DRAFT) {
-			$voterError++;
-			setEventMessages($langs->trans('ErrorCampaignNotDraftCannotBeModified'), null, 'errors');
-		} else {
-			$voter = new CampaignVoter($db);
-			$existingVoters = $voter->fetchByCampaign($object->id);
-			if (is_array($existingVoters) && is_array($pointsByUser)) {
-				$db->begin();
-				foreach ($existingVoters as $fkUser => $existingVoter) {
-					if (array_key_exists((string) $fkUser, $pointsByUser)) {
-						$existingVoter->points = (int) $pointsByUser[$fkUser];
-						if ($existingVoter->update($user) <= 0) {
-							$voterError++;
-							$voterUser = new User($db);
-							$voterUser->fetch((int) $fkUser);
-							setEventMessages($langs->trans($existingVoter->error, $voterUser->getFullName($langs)), null, 'errors');
-							break;
-						}
-					}
-				}
-				if ($voterError) {
-					$db->rollback();
-				} else {
-					$db->commit();
-				}
-			}
-		}
-		if (!$voterError) {
+		if ($object->saveVoterPoints($user, is_array($pointsByUser) ? $pointsByUser : array()) > 0) {
 			setEventMessages($langs->trans('VoterPointsSaved'), null, 'mesgs');
+		} else {
+			setEventMessages($object->error, null, 'errors');
 		}
 		header('Location: '.dol_buildpath('/salonerp/campaign_card.php', 1).'?id='.$object->id);
 		exit;
@@ -760,6 +719,11 @@ if ($action == 'create') {
 			$deleteUrl = $_SERVER["PHP_SELF"].'?id='.$object->id.'&action=delete&token='.newToken();
 			print dolGetButtonAction('', $langs->trans("Delete"), 'delete', $deleteUrl, 'action-delete-no-ajax', $permissiontodelete);
 		}
+		print '</div>'."\n";
+	} elseif ((int) $object->status === Campaign::STATUS_EXTINCT) {
+		// Extinct: the creator never opened the vote, nothing to keep.
+		print '<div class="tabsAction">'."\n";
+		print dolGetButtonAction('', $langs->trans("Delete"), 'delete', $_SERVER["PHP_SELF"].'?id='.$object->id.'&action=delete&token='.newToken(), 'action-delete-no-ajax', $permissiontodelete);
 		print '</div>'."\n";
 	}
 }

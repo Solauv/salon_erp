@@ -22,8 +22,20 @@ tag donné.
   elle n'est jamais enregistrée par Dolibarr (ni en base, ni en session, ni en fichier).
   Il appartient à l'utilisateur de la conserver en lieu sûr.
 
-Les lots suivants ajouteront le vote chiffré et chaîné, la clôture et le dépouillement,
-puis un onglet de déchiffrement.
+- Vote (onglet « Voter ») entre la date de début et la date de fin. Le responsable vote
+  en premier, avec sa clé privée (vérifiée, jamais enregistrée) : son vote ouvre la
+  campagne aux autres votants. Chaque votant répartit la totalité de ses points entre les
+  tiers de la campagne, une seule fois, sans retour possible. Sans vote du responsable
+  avant la fin, la campagne s'éteint et peut être supprimée.
+- Votes secrets et chaînés : chaque vote est chiffré avec la clé publique de la campagne
+  et porte l'empreinte du précédent, la première étant l'empreinte de genèse.
+- Fichier des votes à télécharger, obligatoire avant de voter : la genèse en clair (toutes
+  les informations publiques, nommées : votants et leurs points, tiers, responsable, tag,
+  groupe) et tous les votes, chiffrés et chaînés, sans aucune identité en clair. Chacun
+  peut y revérifier la chaîne, en cas de désaccord ou de contrôle.
+
+Les lots suivants ajouteront la clôture et le dépouillement, puis un onglet de
+déchiffrement.
 
 ## Prérequis
 
@@ -39,8 +51,8 @@ puis un onglet de déchiffrement.
 2. Se connecter en tant qu'administrateur, aller dans **Configuration > Modules**.
 3. Repérer le module **Votes** (famille CRM) et l'activer.
 
-Le module crée trois tables (`llx_salonerp_campaign`, `llx_salonerp_campaign_voter` et
-`llx_salonerp_campaign_thirdparty`)
+Le module crée quatre tables (`llx_salonerp_campaign`, `llx_salonerp_campaign_voter`,
+`llx_salonerp_campaign_thirdparty` et `llx_salonerp_campaign_vote`)
 et trois permissions (lire, créer/modifier/valider, supprimer les campagnes) à
 accorder aux utilisateurs concernés dans **Configuration > Utilisateurs & groupes**.
 

@@ -85,13 +85,16 @@ class Campaign extends CommonObject
 	const STATUS_DRAFT = 0;
 	/**
 	 * Validated: the keypair and the genesis hash are set, nothing else is editable.
-	 * Statuses 2 (VOTE_OPEN), 3 (ENDED), 4 (REVEALED), 8 (EXTINCT) belong to lot 2/3
-	 * and are only reserved here so the constant values never collide.
+	 * Only the creator can vote, with the private key: that opens the vote.
 	 */
 	const STATUS_VALIDATED = 1;
+	/** Vote open to every voter: the creator has voted. */
 	const STATUS_VOTE_OPEN = 2;
+	/** date_end reached with the vote open: waits for the reveal (lot 3). */
 	const STATUS_ENDED = 3;
+	/** Reserved for lot 3. */
 	const STATUS_REVEALED = 4;
+	/** date_end reached before the creator voted: no vote at all, deletable. */
 	const STATUS_EXTINCT = 8;
 	const STATUS_CANCELED = 9;
 
@@ -338,6 +341,30 @@ class Campaign extends CommonObject
 	}
 
 	/**
+	 * Lock the campaign row until the end of the current transaction (SELECT
+	 * ... FOR UPDATE) and reread its status under that lock. Must be called
+	 * after $this->db->begin(). Every method that changes what validate()
+	 * freezes, or that appends to the vote chain, takes this lock first: two
+	 * such operations on one campaign are then strictly sequential, and none
+	 * can slip in between validate()'s read and its write.
+	 *
+	 * @return	?int	Status read under the lock, null if the row is missing or on SQL error
+	 */
+	protected function lockAndFetchStatus()
+	{
+		$sql = "SELECT status FROM ".$this->db->prefix().$this->table_element;
+		$sql .= " WHERE rowid = ".((int) $this->id)." FOR UPDATE";
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			return null;
+		}
+		$obj = $this->db->fetch_object($resql);
+		$this->db->free($resql);
+
+		return $obj ? (int) $obj->status : null;
+	}
+
+	/**
 	 * Update object into database. Refused once the campaign is no longer a draft:
 	 * nothing (fields, voters, points, thirdparties) can change after validate().
 	 * Changing the tag empties the thirdparty list. The status is
@@ -384,8 +411,8 @@ class Campaign extends CommonObject
 	}
 
 	/**
-	 * Delete object in database. Allowed only in draft status (reread from the
-	 * database): a validated campaign carries a genesis hash and a public key
+	 * Delete object in database. Allowed only in draft or extinct status (reread
+	 * from the database): a validated campaign carries a genesis hash and a public key
 	 * that must not be lost silently. All-or-nothing: voters, thirdparties and
 	 * the campaign row are deleted in a single transaction.
 	 *
@@ -395,7 +422,10 @@ class Campaign extends CommonObject
 	 */
 	public function delete(User $user, $notrigger = 0)
 	{
-		if ($this->fetchStatusFromDb() !== self::STATUS_DRAFT) {
+		// An extinct campaign never had a single vote (its creator never
+		// opened it); the vote table's foreign key refuses the delete anyway
+		// should a vote exist.
+		if (!in_array($this->fetchStatusFromDb(), array(self::STATUS_DRAFT, self::STATUS_EXTINCT), true)) {
 			$this->error = 'ErrorCampaignNotDraftCannotBeDeleted';
 			return -1;
 		}
@@ -524,7 +554,77 @@ class Campaign extends CommonObject
 	 */
 	public function syncVotersFromGroup(User $user)
 	{
-		if ($this->fetchStatusFromDb() !== self::STATUS_DRAFT) {
+		$this->db->begin();
+		$result = $this->syncVotersFromGroupLocked($user);
+		if ($result < 0) {
+			$this->db->rollback();
+			return -1;
+		}
+		$this->db->commit();
+
+		return 1;
+	}
+
+	/**
+	 * Save the points of the campaign's voters. Draft only, all-or-nothing,
+	 * under the campaign lock (see lockAndFetchStatus()). Users absent from
+	 * $pointsByUser keep their points; ids that are not voters are ignored.
+	 *
+	 * @param	User				$user			User that saves
+	 * @param	array<int|string,int|string>	$pointsByUser	New points, keyed by voter user id
+	 * @return	int<-1,1>							Return integer <0 if KO (translated message in ->error), >0 if OK
+	 */
+	public function saveVoterPoints(User $user, array $pointsByUser)
+	{
+		global $langs;
+
+		$langs->load('salonerp@salonerp');
+		dol_include_once('/salonerp/class/campaignvoter.class.php');
+
+		$this->db->begin();
+
+		if ($this->lockAndFetchStatus() !== self::STATUS_DRAFT) {
+			$this->error = $langs->trans('ErrorCampaignNotDraftCannotBeModified');
+			$this->db->rollback();
+			return -1;
+		}
+
+		$voter = new CampaignVoter($this->db);
+		$existingVoters = $voter->fetchByCampaign($this->id);
+		if (!is_array($existingVoters)) {
+			$this->error = $voter->error;
+			$this->db->rollback();
+			return -1;
+		}
+
+		foreach ($existingVoters as $fkUser => $existingVoter) {
+			if (!array_key_exists((string) $fkUser, $pointsByUser) && !array_key_exists((int) $fkUser, $pointsByUser)) {
+				continue;
+			}
+			$existingVoter->points = (int) $pointsByUser[$fkUser];
+			if ($existingVoter->update($user) <= 0) {
+				$voterUser = new User($this->db);
+				$voterUser->fetch((int) $fkUser);
+				$this->error = $langs->trans($existingVoter->error, $voterUser->getFullName($langs));
+				$this->db->rollback();
+				return -1;
+			}
+		}
+
+		$this->db->commit();
+		return 1;
+	}
+
+	/**
+	 * Body of syncVotersFromGroup(), run with the campaign row locked (see
+	 * lockAndFetchStatus()). The caller owns the transaction.
+	 *
+	 * @param	User		$user	User that synchronizes
+	 * @return	int<-1,1>			Return integer <0 if KO, >0 if OK
+	 */
+	private function syncVotersFromGroupLocked(User $user)
+	{
+		if ($this->lockAndFetchStatus() !== self::STATUS_DRAFT) {
 			$this->error = 'ErrorCampaignNotDraftCannotBeModified';
 			return -1;
 		}
@@ -568,8 +668,6 @@ class Campaign extends CommonObject
 			$defaultPoints = 1;
 		}
 
-		$this->db->begin();
-
 		$error = 0;
 
 		// Add missing voters
@@ -600,13 +698,7 @@ class Campaign extends CommonObject
 			}
 		}
 
-		if ($error) {
-			$this->db->rollback();
-			return -1;
-		}
-
-		$this->db->commit();
-		return 1;
+		return $error ? -1 : 1;
 	}
 
 	/**
@@ -672,11 +764,7 @@ class Campaign extends CommonObject
 	{
 		$this->db->begin();
 
-		$sql = "SELECT status FROM ".$this->db->prefix().$this->table_element;
-		$sql .= " WHERE rowid = ".((int) $this->id)." FOR UPDATE";
-		$resql = $this->db->query($sql);
-		$statusRow = $resql ? $this->db->fetch_object($resql) : null;
-		if (!$statusRow || (int) $statusRow->status !== self::STATUS_DRAFT) {
+		if ($this->lockAndFetchStatus() !== self::STATUS_DRAFT) {
 			$this->error = 'ErrorCampaignNotDraftCannotBeModified';
 			$this->db->rollback();
 			return -1;
@@ -752,9 +840,46 @@ class Campaign extends CommonObject
 	}
 
 	/**
+	 * The names that go into the genesis next to their ids, read now from
+	 * Dolibarr: tag label, group name, creator name, and each voter's name.
+	 * validate() freezes them into the genesis payload; later renamings do
+	 * not reach it.
+	 *
+	 * @param	array<int,int>	$pointsByUser	Voters' envelopes, keyed by user id
+	 * @return	array{0:array<int,array{id:int,name:string,points:int}>,1:array{category:string,group:string,creator:string}}	Named voters, then names
+	 */
+	public function getGenesisNames(array $pointsByUser)
+	{
+		global $langs;
+
+		require_once DOL_DOCUMENT_ROOT.'/categories/class/categorie.class.php';
+		require_once DOL_DOCUMENT_ROOT.'/user/class/usergroup.class.php';
+
+		$voters = array();
+		foreach ($pointsByUser as $userId => $points) {
+			$voterUser = new User($this->db);
+			$voterUser->fetch((int) $userId);
+			$voters[] = array('id' => (int) $userId, 'name' => (string) $voterUser->getFullName($langs), 'points' => (int) $points);
+		}
+
+		$categorie = new Categorie($this->db);
+		$categorie->fetch($this->fk_category);
+		$group = new UserGroup($this->db);
+		$group->fetch($this->fk_usergroup);
+		$creator = new User($this->db);
+		$creator->fetch($this->fk_user_creat);
+
+		return array($voters, array(
+			'category' => (string) $categorie->label,
+			'group' => (string) $group->name,
+			'creator' => (string) $creator->getFullName($langs),
+		));
+	}
+
+	/**
 	 * Build the canonical genesis payload: sorted JSON keys, UTC ISO 8601 dates
 	 * formatted with gmdate() (so the string never depends on PHP's current
-	 * default timezone), voters sorted by fk_user, thirdparties sorted by id
+	 * default timezone), voters sorted by id, thirdparties sorted by id
 	 * with their snapshot (name, code_client, zip, town as at validation): the
 	 * hash thus covers the frozen list AND what each thirdparty was. Adding,
 	 * removing or altering a single thirdparty changes it, and the original
@@ -765,21 +890,26 @@ class Campaign extends CommonObject
 	 * genesis_payload: lots 2/3 verify hash('sha256', genesis_payload) ==
 	 * genesis_hash without ever reconstructing this string again.
 	 *
-	 * @param	array<int,array{fk_user:int,points:int}>	$voters			Voters as [fk_user, points] pairs, any order
+	 * Every public fact is spelled out, never left as a bare id: voters,
+	 * creator, tag and group carry their name as at validation. Only the
+	 * votes themselves are secret (see castVote()).
+	 *
+	 * @param	array<int,array{id:int,name:string,points:int}>	$voters			Voters with their name and envelope, any order
 	 * @param	array<int,array{id:int,name:?string,code_client:?string,zip:?string,town:?string}>	$thirdparties	Snapshot of the frozen thirdparty list, any order
+	 * @param	array{category:string,group:string,creator:string}	$names	Tag label, group name and creator name as at validation
 	 * @return	string	JSON-encoded canonical payload
 	 * @throws	\JsonException	If the payload cannot be JSON-encoded
 	 */
-	public function getGenesisPayload(array $voters, array $thirdparties)
+	public function getGenesisPayload(array $voters, array $thirdparties, array $names)
 	{
 		global $conf;
 
 		$sortedVoters = array();
 		foreach ($voters as $v) {
-			$sortedVoters[] = array((int) $v['fk_user'], (int) $v['points']);
+			$sortedVoters[] = array('id' => (int) $v['id'], 'name' => (string) $v['name'], 'points' => (int) $v['points']);
 		}
 		usort($sortedVoters, function ($a, $b) {
-			return $a[0] <=> $b[0];
+			return $a['id'] <=> $b['id'];
 		});
 
 		// gmdate() ignores date_default_timezone_set(): for a fixed Unix
@@ -803,12 +933,13 @@ class Campaign extends CommonObject
 		});
 
 		$payload = array(
+			'category' => array('id' => (int) $this->fk_category, 'label' => (string) $names['category']),
+			'creator' => array('id' => (int) $this->fk_user_creat, 'name' => (string) $names['creator']),
 			'date_end' => gmdate('Y-m-d\TH:i:s\Z', (int) $this->date_end),
 			'date_start' => gmdate('Y-m-d\TH:i:s\Z', (int) $this->date_start),
 			'entity' => (int) ($this->entity ?: $conf->entity),
-			'fk_category' => (int) $this->fk_category,
-			'fk_user_creat' => (int) $this->fk_user_creat,
-			'fk_usergroup' => (int) $this->fk_usergroup,
+			'group' => array('id' => (int) $this->fk_usergroup, 'name' => (string) $names['group']),
+			'label' => (string) $this->label,
 			'public_key' => (string) $this->public_key,
 			'ref' => (string) $this->ref,
 			'thirdparties' => $sortedThirdparties,
@@ -860,17 +991,7 @@ class Campaign extends CommonObject
 
 		// Lock the row and reread its status: the in-memory ->status of the
 		// object passed by the caller is never trusted for this decision.
-		$sql = "SELECT status FROM ".$this->db->prefix().$this->table_element;
-		$sql .= " WHERE rowid = ".((int) $this->id)." FOR UPDATE";
-		$resql = $this->db->query($sql);
-		if (!$resql) {
-			$this->errors[] = $this->db->lasterror();
-			$this->db->rollback();
-			return -1;
-		}
-		$statusRow = $this->db->fetch_object($resql);
-		$this->db->free($resql);
-		if (!$statusRow || (int) $statusRow->status !== self::STATUS_DRAFT) {
+		if ($this->lockAndFetchStatus() !== self::STATUS_DRAFT) {
 			$this->errors[] = $langs->trans('ErrorCampaignNotDraft');
 			$this->db->rollback();
 			return -1;
@@ -980,13 +1101,14 @@ class Campaign extends CommonObject
 
 		$this->public_key = $publicKeyB64;
 
-		$voterPairs = array();
+		$pointsByUser = array();
 		foreach ($voters as $userId => $v) {
-			$voterPairs[] = array('fk_user' => $userId, 'points' => (int) $v->points);
+			$pointsByUser[(int) $userId] = (int) $v->points;
 		}
+		list($namedVoters, $names) = $this->getGenesisNames($pointsByUser);
 
 		try {
-			$this->genesis_payload = $this->getGenesisPayload($voterPairs, $snapshot);
+			$this->genesis_payload = $this->getGenesisPayload($namedVoters, $snapshot, $names);
 		} catch (\JsonException $e) {
 			$this->errors[] = $langs->trans('ErrorCampaignGenesisPayloadEncoding');
 			sodium_memzero($privateKeyB64);
@@ -1098,6 +1220,352 @@ class Campaign extends CommonObject
 	}
 
 	/**
+	 * Apply the transitions driven by the clock alone, once date_end is
+	 * reached: a validated campaign whose creator never voted becomes
+	 * EXTINCT, a campaign whose vote was open becomes ENDED. Idempotent; the
+	 * UPDATE only matches the expected current status, so two concurrent
+	 * calls cannot fight. castVote() does not rely on it: it checks the time
+	 * window itself, under the campaign lock.
+	 *
+	 * @return	int<-1,1>	Return integer <0 if KO, >0 if OK (->status refreshed)
+	 */
+	public function refreshTimeStatus()
+	{
+		if (empty($this->id) || empty($this->date_end) || $this->date_end > dol_now()) {
+			return 1;
+		}
+
+		foreach (array(self::STATUS_VALIDATED => self::STATUS_EXTINCT, self::STATUS_VOTE_OPEN => self::STATUS_ENDED) as $from => $to) {
+			$sql = "UPDATE ".$this->db->prefix().$this->table_element;
+			$sql .= " SET status = ".((int) $to);
+			$sql .= " WHERE rowid = ".((int) $this->id)." AND status = ".((int) $from);
+			if (!$this->db->query($sql)) {
+				$this->error = 'Error '.$this->db->lasterror();
+				return -1;
+			}
+		}
+
+		$status = $this->fetchStatusFromDb();
+		if ($status !== null) {
+			$this->status = $status;
+		}
+
+		return 1;
+	}
+
+	/**
+	 * Hash of one vote of the chain: SHA-256 of the canonical JSON
+	 * {"ciphertext","prev_hash","seq"} (sorted keys, unescaped slashes).
+	 * Anyone can recompute it from the vote file, without any key.
+	 *
+	 * @param	int		$seq		Rank of the vote in the chain, from 1
+	 * @param	string	$prevHash	Hash of the previous vote, or the genesis hash for seq 1
+	 * @param	string	$ciphertext	Base64 sealed box of the vote
+	 * @return	string				Lowercase hex SHA-256
+	 */
+	public static function computeVoteHash(int $seq, string $prevHash, string $ciphertext): string
+	{
+		$json = json_encode(array('ciphertext' => $ciphertext, 'prev_hash' => $prevHash, 'seq' => $seq), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+
+		return hash('sha256', $json);
+	}
+
+	/**
+	 * Check a whole chain, the way anyone holding the vote file can: the
+	 * genesis payload hashes to the genesis hash, seq runs 1..n without gap,
+	 * each vote points to the previous hash (the genesis hash for the first)
+	 * and hashes to its own recorded hash.
+	 *
+	 * @param	string								$genesisPayload	Genesis payload, as stored
+	 * @param	string								$genesisHash	Genesis hash, as stored
+	 * @param	array<array{seq:int,prev_hash:string,ciphertext:string,hash:string}>	$votes	Votes in chain order
+	 * @return	string								'' if the chain is intact, else the (untranslated) reason
+	 */
+	public static function verifyChain(string $genesisPayload, string $genesisHash, array $votes): string
+	{
+		if (!hash_equals($genesisHash, hash('sha256', $genesisPayload))) {
+			return 'genesis payload does not match the genesis hash';
+		}
+
+		$prev = $genesisHash;
+		$expectedSeq = 1;
+		foreach ($votes as $vote) {
+			if ((int) $vote['seq'] !== $expectedSeq) {
+				return 'vote '.$expectedSeq.': sequence broken';
+			}
+			if (!hash_equals($prev, (string) $vote['prev_hash'])) {
+				return 'vote '.$expectedSeq.': prev_hash does not match the previous hash';
+			}
+			if (!hash_equals(self::computeVoteHash($expectedSeq, $prev, (string) $vote['ciphertext']), (string) $vote['hash'])) {
+				return 'vote '.$expectedSeq.': content does not match its hash';
+			}
+			$prev = (string) $vote['hash'];
+			$expectedSeq++;
+		}
+
+		return '';
+	}
+
+	/**
+	 * The campaign's vote chain, in order, WITHOUT the voters: only what goes
+	 * into the vote file.
+	 *
+	 * @return	array<array{seq:int,prev_hash:string,ciphertext:string,hash:string}>|int<-1,-1>	Votes by seq, or -1 if KO
+	 */
+	public function fetchVotes()
+	{
+		$sql = "SELECT seq, prev_hash, ciphertext, hash FROM ".$this->db->prefix()."salonerp_campaign_vote";
+		$sql .= " WHERE fk_campaign = ".((int) $this->id);
+		$sql .= " ORDER BY seq ASC";
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			$this->error = 'Error '.$this->db->lasterror();
+			return -1;
+		}
+
+		$votes = array();
+		while ($obj = $this->db->fetch_object($resql)) {
+			$votes[] = array(
+				'seq' => (int) $obj->seq,
+				'prev_hash' => (string) $obj->prev_hash,
+				'ciphertext' => (string) $obj->ciphertext,
+				'hash' => (string) $obj->hash,
+			);
+		}
+		$this->db->free($resql);
+
+		return $votes;
+	}
+
+	/**
+	 * When a given user voted on this campaign, if they did.
+	 *
+	 * @param	int		$userId	User id
+	 * @return	int|null|false	Timestamp of the vote, null if not voted, false on SQL error
+	 */
+	public function fetchUserVoteDate($userId)
+	{
+		$sql = "SELECT date_creation FROM ".$this->db->prefix()."salonerp_campaign_vote";
+		$sql .= " WHERE fk_campaign = ".((int) $this->id)." AND fk_user = ".((int) $userId);
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			return false;
+		}
+		$obj = $this->db->fetch_object($resql);
+		$this->db->free($resql);
+
+		return $obj ? (int) $this->db->jdate($obj->date_creation) : null;
+	}
+
+	/**
+	 * Build the downloadable vote file: the genesis in clear (its exact stored
+	 * payload, so its hash can be recomputed, plus a decoded copy to read it),
+	 * then every vote of the chain as {seq, prev_hash, ciphertext, hash}.
+	 * No voter identity and no date in clear: they are inside each ciphertext,
+	 * readable only with the private key at the end of the campaign.
+	 *
+	 * @return	string|int<-1,-1>	Pretty-printed JSON, or -1 if KO
+	 */
+	public function buildVoteFile()
+	{
+		global $langs;
+
+		$langs->load('salonerp@salonerp');
+		$votes = $this->fetchVotes();
+		if (!is_array($votes)) {
+			return -1;
+		}
+
+		$file = array(
+			'format' => 'salonerp-votes/1',
+			'campaign' => (string) $this->ref,
+			'generated_at' => gmdate('Y-m-d\TH:i:s\Z', dol_now()),
+			'how_to_verify' => array(
+				'genesis_hash = sha256(genesis_payload), genesis_payload taken as the exact string below',
+				'vote hash = sha256 of the JSON {"ciphertext":...,"prev_hash":...,"seq":...} (keys in this order, no spaces, slashes unescaped)',
+				'prev_hash of vote 1 = genesis_hash; prev_hash of vote n = hash of vote n-1',
+				'ciphertext = libsodium sealed box (crypto_box_seal) with the campaign public_key, base64; it holds the voter, the date and the points',
+			),
+			'genesis_hash' => (string) $this->genesis_hash,
+			'genesis_payload' => (string) $this->genesis_payload,
+			'genesis' => json_decode((string) $this->genesis_payload, true),
+			// Readable meaning of genesis.tie_rule. Outside the hashed genesis:
+			// this text depends on the reader's language, the code does not.
+			'tie_rule_explanation' => $langs->transnoentitiesnoconv('CampaignTieRuleExplanation'),
+			'votes' => $votes,
+			'last_hash' => empty($votes) ? (string) $this->genesis_hash : $votes[count($votes) - 1]['hash'],
+		);
+
+		return json_encode($file, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+	}
+
+	/**
+	 * Cast a vote: seal it with the campaign public key and append it to the
+	 * chain. Runs under the campaign lock (see lockAndFetchStatus()), so the
+	 * checks below and the append are atomic, and two votes can never compete
+	 * for the same rank.
+	 *
+	 * Refuses, with translated messages in ->errors, if:
+	 *  - the campaign is neither validated nor open (reread under lock);
+	 *  - now is outside [date_start, date_end[;
+	 *  - the user is not a voter of the campaign, or has already voted;
+	 *  - the vote is not open yet and the user is not the creator, or the
+	 *    creator's private key does not match the public key;
+	 *  - a thirdparty is not in the frozen list, points are negative, or
+	 *    the total is not exactly the voter's envelope.
+	 *
+	 * The first valid vote (the creator's) opens the campaign to the others.
+	 *
+	 * @param	User				$user			Voting user
+	 * @param	array<int|string,int|string>	$allocations	Points by thirdparty id
+	 * @param	string				$privateKeyB64	Creator's private key, required for the first vote only
+	 * @return	int								Rank of the vote in the chain (>0), or -1 if KO
+	 */
+	public function castVote(User $user, array $allocations, string $privateKeyB64 = '')
+	{
+		global $langs;
+
+		$langs->load('salonerp@salonerp');
+		dol_include_once('/salonerp/class/campaignvoter.class.php');
+		$this->errors = array();
+
+		$this->db->begin();
+
+		$status = $this->lockAndFetchStatus();
+		if ($status !== self::STATUS_VALIDATED && $status !== self::STATUS_VOTE_OPEN) {
+			$this->errors[] = $langs->trans('ErrorCampaignVoteNotOpen');
+			$this->db->rollback();
+			return -1;
+		}
+
+		$now = dol_now();
+		if ($now < (int) $this->date_start || $now >= (int) $this->date_end) {
+			$this->errors[] = $langs->trans('ErrorCampaignVoteOutsideWindow', dol_print_date($this->date_start, 'dayhour', 'tzuserrel'), dol_print_date($this->date_end, 'dayhour', 'tzuserrel'));
+			$this->db->rollback();
+			return -1;
+		}
+
+		$voterObj = new CampaignVoter($this->db);
+		$voters = $voterObj->fetchByCampaign($this->id);
+		if (!is_array($voters) || !isset($voters[(int) $user->id])) {
+			$this->errors[] = $langs->trans('ErrorCampaignNotAVoter');
+			$this->db->rollback();
+			return -1;
+		}
+		$envelope = (int) $voters[(int) $user->id]->points;
+
+		$votedAt = $this->fetchUserVoteDate($user->id);
+		if ($votedAt !== null) {
+			$this->errors[] = ($votedAt === false) ? $this->db->lasterror() : $langs->trans('ErrorCampaignAlreadyVoted');
+			$this->db->rollback();
+			return -1;
+		}
+
+		if ($status === self::STATUS_VALIDATED) {
+			if ((int) $user->id !== (int) $this->fk_user_creat) {
+				$this->errors[] = $langs->trans('ErrorCampaignCreatorMustVoteFirst');
+				$this->db->rollback();
+				return -1;
+			}
+			if (!self::checkPrivateKey($privateKeyB64, (string) $this->public_key)) {
+				$this->errors[] = $langs->trans('ErrorCampaignPrivateKeyMismatch');
+				$this->db->rollback();
+				return -1;
+			}
+		}
+
+		// Points: only thirdparties of the frozen list, integers >= 0, total
+		// exactly the envelope. Zero allocations are dropped from the ballot.
+		$frozenIds = $this->fetchThirdpartyIds();
+		if (!is_array($frozenIds)) {
+			$this->errors[] = $this->error;
+			$this->db->rollback();
+			return -1;
+		}
+		$ballot = array();
+		$total = 0;
+		foreach ($allocations as $socId => $points) {
+			if (!in_array((int) $socId, $frozenIds, true)) {
+				$this->errors[] = $langs->trans('ErrorCampaignVoteUnknownThirdparty', (int) $socId);
+				continue;
+			}
+			if (!preg_match('/^\d+$/', trim((string) $points))) {
+				$this->errors[] = $langs->trans('ErrorCampaignVoteInvalidPoints');
+				continue;
+			}
+			if ((int) $points > 0) {
+				$ballot[(int) $socId] = (int) $points;
+				$total += (int) $points;
+			}
+		}
+		if (empty($this->errors) && $total !== $envelope) {
+			$this->errors[] = $langs->trans('ErrorCampaignVoteTotalMismatch', $total, $envelope);
+		}
+		if (!empty($this->errors)) {
+			$this->db->rollback();
+			return -1;
+		}
+		ksort($ballot);
+
+		$sql = "SELECT seq, hash FROM ".$this->db->prefix()."salonerp_campaign_vote";
+		$sql .= " WHERE fk_campaign = ".((int) $this->id)." ORDER BY seq DESC";
+		$sql .= $this->db->plimit(1);
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			$this->errors[] = $this->db->lasterror();
+			$this->db->rollback();
+			return -1;
+		}
+		$last = $this->db->fetch_object($resql);
+		$this->db->free($resql);
+		$seq = $last ? (int) $last->seq + 1 : 1;
+		$prevHash = $last ? (string) $last->hash : (string) $this->genesis_hash;
+
+		$pairs = array();
+		foreach ($ballot as $socId => $points) {
+			$pairs[] = array($socId, $points);
+		}
+		$plaintext = json_encode(array(
+			'campaign' => (string) $this->ref,
+			'date' => gmdate('Y-m-d\TH:i:s\Z', $now),
+			'fk_user' => (int) $user->id,
+			'points' => $pairs,
+			'seq' => $seq,
+		), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+		$publicKey = base64_decode((string) $this->public_key, true);
+		$ciphertext = base64_encode(sodium_crypto_box_seal($plaintext, (string) $publicKey));
+		sodium_memzero($plaintext);
+		$hash = self::computeVoteHash($seq, $prevHash, $ciphertext);
+
+		$sql = "INSERT INTO ".$this->db->prefix()."salonerp_campaign_vote";
+		$sql .= " (fk_campaign, seq, fk_user, ciphertext, prev_hash, hash, date_creation) VALUES (";
+		$sql .= ((int) $this->id).", ".((int) $seq).", ".((int) $user->id);
+		$sql .= ", '".$this->db->escape($ciphertext)."', '".$this->db->escape($prevHash)."', '".$this->db->escape($hash)."'";
+		$sql .= ", '".$this->db->idate($now)."')";
+		if (!$this->db->query($sql)) {
+			$this->errors[] = $this->db->lasterror();
+			$this->db->rollback();
+			return -1;
+		}
+
+		if ($status === self::STATUS_VALIDATED) {
+			$sql = "UPDATE ".$this->db->prefix().$this->table_element;
+			$sql .= " SET status = ".self::STATUS_VOTE_OPEN;
+			$sql .= " WHERE rowid = ".((int) $this->id)." AND status = ".self::STATUS_VALIDATED;
+			if (!$this->db->query($sql)) {
+				$this->errors[] = $this->db->lasterror();
+				$this->db->rollback();
+				return -1;
+			}
+			$this->status = self::STATUS_VOTE_OPEN;
+		}
+
+		$this->db->commit();
+
+		return $seq;
+	}
+
+	/**
 	 * Output a field value for display. Overrides the fields the generic
 	 * renderer shows badly:
 	 *  - fk_category: Categorie::getNomUrl() forces a white text, meant to sit
@@ -1193,17 +1661,28 @@ class Campaign extends CommonObject
 		if (empty($this->labelStatus) || empty($this->labelStatusShort)) {
 			global $langs;
 			$langs->load('salonerp@salonerp');
-			$this->labelStatus[self::STATUS_DRAFT] = $langs->transnoentitiesnoconv('Draft');
-			$this->labelStatus[self::STATUS_VALIDATED] = $langs->transnoentitiesnoconv('Validated');
-			$this->labelStatusShort[self::STATUS_DRAFT] = $langs->transnoentitiesnoconv('Draft');
-			$this->labelStatusShort[self::STATUS_VALIDATED] = $langs->transnoentitiesnoconv('Validated');
+			foreach (array(
+				self::STATUS_DRAFT => 'Draft',
+				self::STATUS_VALIDATED => 'Validated',
+				self::STATUS_VOTE_OPEN => 'CampaignStatusVoteOpen',
+				self::STATUS_ENDED => 'CampaignStatusEnded',
+				self::STATUS_EXTINCT => 'CampaignStatusExtinct',
+			) as $code => $key) {
+				$this->labelStatus[$code] = $langs->transnoentitiesnoconv($key);
+				$this->labelStatusShort[$code] = $langs->transnoentitiesnoconv($key);
+			}
 		}
 
-		$statusType = 'status'.$status;
-		if ($status == self::STATUS_DRAFT) {
-			$statusType = 'status0';
-		} elseif ($status == self::STATUS_VALIDATED) {
-			$statusType = 'status4';
+		$statusTypes = array(
+			self::STATUS_DRAFT => 'status0',
+			self::STATUS_VALIDATED => 'status1',
+			self::STATUS_VOTE_OPEN => 'status4',
+			self::STATUS_ENDED => 'status6',
+			self::STATUS_EXTINCT => 'status9',
+		);
+		$statusType = isset($statusTypes[$status]) ? $statusTypes[$status] : 'status'.$status;
+		if (!isset($this->labelStatus[$status])) {
+			return '';
 		}
 
 		return dolGetStatus($this->labelStatus[$status], $this->labelStatusShort[$status], '', $statusType, $mode, '', $paramsBadge);
