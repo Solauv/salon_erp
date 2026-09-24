@@ -604,6 +604,13 @@ foreach ($object->fields as $key => $val) {
 			} else {
 				print $form->multiselectarray('search_'.$key, $val['arrayofkeyval'], (isset($search[$key]) ? (array) $search[$key] : array()), 0, 0, 'maxwidth100'.($key == 'status' ? ' search_status width100 onrightofpage' : ''), 1);
 			}
+		} elseif ($key == 'fk_category') {
+			// The generic selectForForms() cannot instantiate Categorie from
+			// the field type, and would list every kind of category anyway:
+			// customer tags only, as on the card. -1 (empty) is ignored above.
+			require_once DOL_DOCUMENT_ROOT.'/core/class/html.formother.class.php';
+			$formother = new FormOther($db);
+			print $formother->select_categories('customer', (isset($search[$key]) ? (int) $search[$key] : 0), 'search_fk_category', 0, 1, 'maxwidth150');
 		} elseif ((strpos($val['type'], 'integer:') === 0) || (strpos($val['type'], 'sellist:') === 0)) {
 			print $object->showInputField($val, $key, (isset($search[$key]) ? $search[$key] : ''), '', '', 'search_', $cssforfield.' maxwidth250', 1);
 		} elseif (preg_match('/^(date|timestamp|datetime)/', $val['type'])) {

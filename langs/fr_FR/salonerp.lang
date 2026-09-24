@@ -172,6 +172,51 @@ CampaignVoter = Votant
 CampaignDistribution = Répartition
 
 #
+# Vote file check and decryption (lot 4)
+#
+VoteFileDecryptTab = Déchiffrer
+VoteFileDecryptTabText = Déposez un fichier des votes téléchargé depuis cette campagne : le module vérifie qu'il est intact et qu'il correspond à la chaîne officielle. Le déchiffrement sera possible une fois les votes révélés.
+VoteFileDecryptTabTextRevealed = Déposez un fichier des votes téléchargé depuis cette campagne : le module vérifie qu'il est intact et qu'il correspond à la chaîne officielle, puis le déchiffre avec la clé révélée.
+VoteFileCheck = Vérifier le fichier
+VoteFileCheckAndDecrypt = Vérifier et déchiffrer
+VoteFileNotStored = Le fichier est lu puis oublié : il n'est jamais conservé sur le serveur.
+VoteFileGeneratedAt = Fichier généré le
+VoteFileChecks = Contrôles
+VoteFileDecryptedVotes = Votes déchiffrés
+VoteFileCheckCampaign = Campagne
+VoteFileCheckCampaignOk = Le fichier appartient bien à la campagne %s (même empreinte de genèse).
+VoteFileCheckCampaignKo = Le fichier (campagne « %s ») n'appartient pas à la campagne %s : son empreinte de genèse est différente.
+VoteFileCheckGenesis = Genèse
+VoteFileCheckGenesisOk = La genèse du fichier correspond à son empreinte.
+VoteFileCheckGenesisKo = La genèse du fichier ne correspond pas à son empreinte : elle a été modifiée.
+VoteFileCheckChain = Chaîne du fichier
+VoteFileCheckChainOk = Le fichier compte %s vote(s), qui forment une chaîne intacte depuis la genèse.
+VoteFileCheckChainKo = La chaîne du fichier est altérée : %s.
+VoteChainGenesisMismatch = la genèse ne correspond pas à son empreinte
+VoteChainSeqBroken = la numérotation est rompue au vote n°%s
+VoteChainPrevHashMismatch = le lien (prev_hash) du vote n°%s ne pointe pas sur le vote précédent
+VoteChainHashMismatch = le contenu du vote n°%s ne correspond pas à son empreinte
+VoteFileCheckOfficial = Chaîne officielle
+VoteFileCheckOfficialOk = Le(s) %s vote(s) du fichier figure(nt) à l'identique, au même rang, parmi les %s vote(s) officiel(s).
+VoteFileCheckOfficialOlder = Le fichier a été téléchargé avant les derniers votes : c'est normal.
+VoteFileCheckOfficialMissing = Le vote n°%s du fichier est absent de la chaîne officielle, qui ne compte que %s votes : un vote a disparu de la base, ou le fichier a été modifié.
+VoteFileCheckOfficialDiverge = Le fichier et la chaîne officielle divergent à partir du vote n°%s : l'un des deux a été modifié.
+VoteFileBallotUnreadable = Vote illisible avec cette clé.
+VoteFileBallotMisplaced = Ce vote se présente comme le n°%s de la campagne « %s » : il a été déplacé.
+ExternalDecryption = Déchiffrement externe
+ExternalDecryptionText = Vérifiez et déchiffrez un fichier des votes de n'importe quelle campagne, même tenue sur une autre instance de Dolibarr : seuls le fichier et la clé privée révélée sont utilisés, rien n'est lu dans la base. Sans clé, seuls les contrôles d'intégrité sont faits.
+VoteFile = Fichier des votes (.json)
+RevealedPrivateKey = Clé privée révélée
+RevealedPrivateKeyHelp = Affichée dans l'onglet Résultats de la campagne, une fois les votes révélés.
+ManualDecryptionTitle = Déchiffrer sans Dolibarr
+ManualDecryptionText = Le fichier des votes peut aussi être vérifié et déchiffré sur n'importe quel ordinateur, sans Dolibarr ni ce module, avec le script ci-dessous. Il ne demande que PHP 7.2 ou plus avec l'extension sodium, fournie par défaut.
+ManualDecryptionStep1 = Téléchargez le script (ou copiez-le dans un fichier dechiffrer-votes.php) et placez-le à côté du fichier des votes.
+ManualDecryptionStep2 = Relevez la clé privée révélée dans l'onglet Résultats de la campagne.
+ManualDecryptionStep3 = Dans un terminal, lancez : php dechiffrer-votes.php FICHIER.json CLÉ_PRIVÉE
+ManualDecryptionStep4 = Le script vérifie la genèse puis chaque maillon de la chaîne, et affiche chaque vote en clair : votant, date et points par tiers. Un maillon « ALTÉRÉE » prouve que le fichier a été modifié.
+ManualDecryptionDownload = Télécharger le script
+
+#
 # Tie-break rule, fixed at validation and part of the genesis hash
 #
 CampaignTieRuleTitle = Règle d'égalité
@@ -230,3 +275,5 @@ ErrorCampaignBallotMismatch = Le vote n°%s ne correspond pas à son enregistrem
 ErrorCampaignNotRevealed = Les votes de cette campagne n'ont pas encore été révélés.
 ErrorCampaignOnlyCreatorCanAttribute = Seul le responsable de la campagne peut attribuer les commerciaux.
 ErrorCampaignAlreadyAttributed = Les commerciaux de cette campagne ont déjà été attribués.
+ErrorVoteFileInvalid = Fichier des votes illisible (%s).
+ErrorVoteFileMissing = Aucun fichier des votes valide n'a été déposé (5 Mo au plus).
