@@ -1,0 +1,139 @@
+# Copyright (C) 2026 EBI
+# This file is licensed under the terms of the GNU GPL v3 or later.
+# See COPYING file for more details.
+
+#
+# Generic
+#
+ModuleSalonerpName = Votes
+ModuleSalonerpDesc = Campagnes de vote à enveloppe cachée sur les tiers clients
+SalonerpDescription = Campagnes de vote à enveloppe cachée sur les tiers clients
+SalonerpArea = Accueil Votes
+SalonerpSetup = Configuration de Votes
+
+#
+# Menu / navigation
+#
+Campaign = Campagne
+Campaigns = Campagnes
+Create = Créer
+NewCampaign = Nouvelle campagne
+ListCampaign = Liste
+
+#
+# Fields
+#
+TechnicalID = ID technique
+Entity = Entité
+Ref = Réf.
+Label = Libellé
+DateStart = Date de début
+DateEnd = Date de fin
+CustomerCategory = Tag client
+VotersGroup = Groupe des votants
+DefaultPoints = Points par défaut
+Description = Description
+NotePublic = Note publique
+NotePrivate = Note privée
+PublicKey = Clé publique
+TieRule = Règle d'égalité
+GenesisHash = Empreinte de genèse
+GenesisPayload = Contenu de la genèse
+DateValidation = Date de validation
+UserValidation = Validé par
+Status = Statut
+DateCreation = Date de création
+DateModification = Date de modification
+Manager = Responsable
+UserModif = Modifié par
+ImportId = Import
+
+CampaignDateStartHelp = Date et heure d'ouverture du vote
+CampaignDateEndHelp = Date et heure de fin du vote
+CampaignCategoryHelp = Tag portant sur les tiers clients : seuls les tiers de ce tag reçoivent des points
+CampaignGroupHelp = Groupe d'utilisateurs dont les membres actifs votent
+CampaignDefaultPointsHelp = Valeur utilisée pour préremplir les points de chaque votant lors de la synchronisation avec le groupe (1 si vide)
+CampaignManagerHelp = Créateur de la campagne : il vote en premier et devra ressaisir la clé privée pour dépouiller
+
+Draft = Brouillon
+Validated = Validée
+
+#
+# Voters block (draft card)
+#
+Voters = Votants
+VoterUser = Utilisateur
+VoterPoints = Points
+Points = Points
+SyncVotersFromGroup = Synchroniser avec le groupe
+SaveVoterPoints = Enregistrer les points
+NoVoterYet = Aucun votant pour le moment. Synchronisez avec le groupe pour en ajouter.
+VotersSynchronized = Liste des votants synchronisée avec le groupe.
+VoterPointsSaved = Points des votants enregistrés.
+CampaignValidated = Campagne validée. Conservez la clé privée affichée ci-dessous : elle ne sera plus jamais affichée.
+CampaignAlreadyValidatedKeyShownOnce = Cette campagne est déjà validée. La clé privée n'est affichée qu'une seule fois, au moment de la validation : elle ne peut plus être réaffichée.
+
+#
+# Thirdparties block: the frozen list
+#
+CampaignThirdparties = Tiers de la campagne
+CampaignThirdpartiesDraftHelp = Les tiers sur lesquels les votants répartiront leurs points. La liste est tirée du tag client par « Synchroniser avec le tag » ; elle est vidée si le tag change. Elle sera figée à la validation et inscrite dans l'empreinte de genèse.
+CampaignThirdpartiesFrozenHelp = Liste figée à la validation et inscrite dans l'empreinte de genèse, avec chaque tiers tel qu'il était ce jour-là (nom, code client, code postal, ville) : ajouter ou retirer le tag d'un tiers n'a plus aucun effet sur cette campagne, et le modifier ou le supprimer ne change pas cette liste.
+SyncThirdpartiesFromCategory = Synchroniser avec le tag
+NoThirdpartyYet = Aucun tiers pour le moment. Synchronisez avec le tag pour en ajouter.
+ThirdpartiesSynchronized = Liste des tiers synchronisée avec le tag.
+CampaignThirdpartyDeleted = supprimé de Dolibarr depuis
+CampaignThirdpartyNowNamed = aujourd'hui : %s
+
+#
+# Validation and private key
+#
+ConfirmValidateCampaignTitle = Valider la campagne
+ConfirmValidateCampaignText = La validation fige définitivement la campagne : plus aucune modification des dates, du tag, du groupe, des votants ou de leurs points ne sera possible. Une paire de clés est générée ; la clé privée sera affichée une seule fois juste après, elle n'est conservée nulle part par Dolibarr. Sans elle, la campagne ne pourra ni démarrer, ni être dépouillée. Confirmez-vous ?
+PrivateKeyWarningTitle = Clé privée de la campagne — à conserver maintenant
+PrivateKeyWarningText = Cette clé n'est affichée qu'une seule fois et n'est stockée nulle part par Dolibarr : sans elle, la campagne ne pourra ni démarrer ni être dépouillée. Copiez-la ou téléchargez-la avant de quitter cette page.
+PrivateKeyLabel = Clé privée (base64)
+CopyPrivateKey = Copier
+CopyPrivateKeyDone = Clé copiée dans le presse-papiers
+DownloadPrivateKey = Télécharger (.key)
+DeleteCampaign = Supprimer la campagne
+
+#
+# Tie-break rule, fixed at validation and part of the genesis hash
+#
+CampaignTieRuleTitle = Règle d'égalité
+CampaignTieRule_B_E = Part de l'enveloppe, puis tirage vérifiable
+CampaignTieRuleExplanation = En cas d'égalité de points sur un tiers : 1) l'emporte celui qui y a consacré la plus forte part de son enveloppe (points misés / points attribués) ; 2) si l'égalité persiste, tirage au sort vérifiable, dérivé de l'empreinte finale de la chaîne des votes et de l'identifiant du tiers, que chacun peut recalculer. Cette règle est fixée à la validation et inscrite dans l'empreinte de genèse.
+
+#
+# Permissions (libellés de droits du descripteur de module)
+#
+PermissionReadCampaign = Consulter les campagnes
+PermissionWriteCampaign = Créer/modifier/valider les campagnes
+PermissionDeleteCampaign = Supprimer les campagnes
+
+#
+# Errors
+#
+ErrorCampaignNotDraft = La campagne n'est plus à l'état brouillon.
+ErrorCampaignNotDraftCannotBeModified = La campagne est validée : elle ne peut plus être modifiée.
+ErrorCampaignNotDraftCannotBeDeleted = Seule une campagne en brouillon peut être supprimée.
+ErrorCampaignOnlyCreatorCanValidate = Seul le créateur de la campagne peut la valider.
+ErrorCampaignDateEndBeforeStart = La date de fin doit être postérieure à la date de début.
+ErrorCampaignDateEndInPast = La date de fin doit être postérieure à la date et l'heure actuelles.
+ErrorCampaignCategoryMandatory = Le tag client est obligatoire.
+ErrorCampaignCategoryNotFound = Le tag client sélectionné est introuvable.
+ErrorCampaignCategoryWrongType = Le tag sélectionné n'est pas un tag client.
+ErrorCampaignCategoryWrongEntity = Le tag client sélectionné n'appartient pas à cette entité.
+ErrorCampaignNoThirdparty = La campagne n'a aucun tiers : synchronisez avec le tag.
+ErrorCampaignThirdpartyNotFound = Le tiers n°%s n'existe plus dans Dolibarr : resynchronisez avec le tag.
+ErrorCampaignGroupMandatory = Le groupe des votants est obligatoire.
+ErrorCampaignGroupNotFound = Le groupe des votants sélectionné est introuvable.
+ErrorCampaignGroupWrongEntity = Le groupe des votants sélectionné n'appartient pas à cette entité.
+ErrorCampaignNoVoter = La campagne n'a aucun votant.
+ErrorCampaignVoterPointsNotPositive = Les points de %s doivent être supérieurs à zéro.
+ErrorCampaignCreatorNotVoter = Le responsable de la campagne doit faire partie des votants.
+ErrorCampaignVoterMissingKeys = Votant invalide : campagne ou utilisateur manquant.
+ErrorCampaignGenesisPayloadEncoding = Erreur interne : le contenu de la genèse n'a pas pu être encodé.
+ErrorCampaignValidationWriteFailed = La validation n'a pas pu être enregistrée en base : rien n'a été modifié.
+ErrorSalonerpSodiumExtensionMissing = L'extension PHP sodium est requise par ce module (génération de la paire de clés de campagne) et est absente sur ce serveur.

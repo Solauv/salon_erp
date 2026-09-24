@@ -1,0 +1,5 @@
+# Le depot du module ne contient QUE ce qui part en production.
+# Rien a exclure du livrable : les tests, l'outillage et les notes vivent dans
+# le depot d'atelier. Ces entrees ne sont la que pour les scories locales.
+*.log
+.DS_Store

@@ -1,0 +1,139 @@
+# Copyright (C) 2026 EBI
+# This file is licensed under the terms of the GNU GPL v3 or later.
+# See COPYING file for more details.
+
+#
+# Generic
+#
+ModuleSalonerpName = Votes
+ModuleSalonerpDesc = Hidden-auction vote campaigns on customer thirdparties
+SalonerpDescription = Hidden-auction vote campaigns on customer thirdparties
+SalonerpArea = Votes home
+SalonerpSetup = Votes setup
+
+#
+# Menu / navigation
+#
+Campaign = Campaign
+Campaigns = Campaigns
+Create = Create
+NewCampaign = New campaign
+ListCampaign = List
+
+#
+# Fields
+#
+TechnicalID = Technical ID
+Entity = Entity
+Ref = Ref.
+Label = Label
+DateStart = Start date
+DateEnd = End date
+CustomerCategory = Customer tag
+VotersGroup = Voters group
+DefaultPoints = Default points
+Description = Description
+NotePublic = Public note
+NotePrivate = Private note
+PublicKey = Public key
+TieRule = Tie-break rule
+GenesisHash = Genesis hash
+GenesisPayload = Genesis payload
+DateValidation = Validation date
+UserValidation = Validated by
+Status = Status
+DateCreation = Creation date
+DateModification = Modification date
+Manager = Manager
+UserModif = Modified by
+ImportId = Import
+
+CampaignDateStartHelp = Date and time the vote opens
+CampaignDateEndHelp = Date and time the vote closes
+CampaignCategoryHelp = Tag on customer thirdparties: only thirdparties carrying this tag can receive points
+CampaignGroupHelp = User group whose active members vote
+CampaignDefaultPointsHelp = Value used to prefill each voter's points when syncing with the group (1 if empty)
+CampaignManagerHelp = Campaign creator: votes first and will have to re-enter the private key to tally results
+
+Draft = Draft
+Validated = Validated
+
+#
+# Voters block (draft card)
+#
+Voters = Voters
+VoterUser = User
+VoterPoints = Points
+Points = Points
+SyncVotersFromGroup = Sync with group
+SaveVoterPoints = Save points
+NoVoterYet = No voter yet. Sync with the group to add some.
+VotersSynchronized = Voter list synchronized with the group.
+VoterPointsSaved = Voter points saved.
+CampaignValidated = Campaign validated. Save the private key shown below: it will not be shown again.
+CampaignAlreadyValidatedKeyShownOnce = This campaign is already validated. The private key is shown only once, at validation time: it cannot be shown again.
+
+#
+# Thirdparties block: the frozen list
+#
+CampaignThirdparties = Campaign thirdparties
+CampaignThirdpartiesDraftHelp = The thirdparties the voters will share their points across. The list is taken from the customer tag with "Sync with the tag"; it is emptied when the tag changes. It is frozen at validation and recorded in the genesis hash.
+CampaignThirdpartiesFrozenHelp = List frozen at validation and recorded in the genesis hash, with each thirdparty as it was on that day (name, customer code, zip, town): adding or removing the tag on a thirdparty no longer has any effect on this campaign, and editing or deleting it does not change this list.
+SyncThirdpartiesFromCategory = Sync with the tag
+NoThirdpartyYet = No thirdparty yet. Sync with the tag to add some.
+ThirdpartiesSynchronized = Thirdparty list synchronized with the tag.
+CampaignThirdpartyDeleted = deleted from Dolibarr since
+CampaignThirdpartyNowNamed = now: %s
+
+#
+# Validation and private key
+#
+ConfirmValidateCampaignTitle = Validate the campaign
+ConfirmValidateCampaignText = Validating permanently freezes the campaign: dates, tag, group, voters and their points can no longer be changed. A keypair is generated; the private key will be shown once right after, and is not kept anywhere by Dolibarr. Without it the campaign can neither start nor be tallied. Confirm?
+PrivateKeyWarningTitle = Campaign private key -- save it now
+PrivateKeyWarningText = This key is shown only once and is not stored anywhere by Dolibarr: without it the campaign can neither start nor be tallied. Copy it or download it before leaving this page.
+PrivateKeyLabel = Private key (base64)
+CopyPrivateKey = Copy
+CopyPrivateKeyDone = Key copied to clipboard
+DownloadPrivateKey = Download (.key)
+DeleteCampaign = Delete campaign
+
+#
+# Tie-break rule, fixed at validation and part of the genesis hash
+#
+CampaignTieRuleTitle = Tie-break rule
+CampaignTieRule_B_E = Share of budget, then verifiable draw
+CampaignTieRuleExplanation = In case of a tie on points for a thirdparty: 1) the voter who committed the largest share of their own budget (points bid / points allocated) wins; 2) if still tied, a verifiable draw, derived from the final hash of the vote chain and the thirdparty id, that anyone can recompute. This rule is fixed at validation time and recorded in the genesis hash.
+
+#
+# Permissions (rights labels of the module descriptor)
+#
+PermissionReadCampaign = View campaigns
+PermissionWriteCampaign = Create/modify/validate campaigns
+PermissionDeleteCampaign = Delete campaigns
+
+#
+# Errors
+#
+ErrorCampaignNotDraft = The campaign is no longer a draft.
+ErrorCampaignNotDraftCannotBeModified = The campaign is validated: it can no longer be modified.
+ErrorCampaignNotDraftCannotBeDeleted = Only a draft campaign can be deleted.
+ErrorCampaignOnlyCreatorCanValidate = Only the campaign creator can validate it.
+ErrorCampaignDateEndBeforeStart = The end date must be after the start date.
+ErrorCampaignDateEndInPast = The end date must be after the current date and time.
+ErrorCampaignCategoryMandatory = The customer tag is mandatory.
+ErrorCampaignCategoryNotFound = The selected customer tag could not be found.
+ErrorCampaignCategoryWrongType = The selected tag is not a customer tag.
+ErrorCampaignCategoryWrongEntity = The selected customer tag does not belong to this entity.
+ErrorCampaignNoThirdparty = The campaign has no thirdparty: sync with the tag.
+ErrorCampaignThirdpartyNotFound = Thirdparty #%s no longer exists in Dolibarr: sync with the tag again.
+ErrorCampaignGroupMandatory = The voters group is mandatory.
+ErrorCampaignGroupNotFound = The selected voters group could not be found.
+ErrorCampaignGroupWrongEntity = The selected voters group does not belong to this entity.
+ErrorCampaignNoVoter = The campaign has no voter.
+ErrorCampaignVoterPointsNotPositive = Points of %s must be greater than zero.
+ErrorCampaignCreatorNotVoter = The campaign manager must be among the voters.
+ErrorCampaignVoterMissingKeys = Invalid voter: missing campaign or user.
+ErrorCampaignGenesisPayloadEncoding = Internal error: the genesis payload could not be encoded.
+ErrorCampaignValidationWriteFailed = Validation could not be written to the database: nothing was changed.
+ErrorSalonerpSodiumExtensionMissing = The PHP sodium extension is required by this module (campaign keypair generation) and is missing on this server.
