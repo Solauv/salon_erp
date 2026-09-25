@@ -223,9 +223,16 @@ function salonerpExternalDecryptScript()
 // Nécessite PHP 7.2 ou plus avec l'extension sodium (présente par défaut).
 $f = json_decode(file_get_contents($argv[1]), true);
 $g = json_decode($f['genesis_payload'], true);
+// Pas de compatibilité : une genèse figée avant ballot_size n'est pas
+// exploitable par ce script (elle ne fixe aucune taille de bourrage).
+if (!isset($g['ballot_size']) || !is_int($g['ballot_size']) || $g['ballot_size'] <= 0) {
+	fwrite(STDERR, "Genèse invalide : taille de bulletin (ballot_size) absente ou incorrecte. Fichier non conforme.\n");
+	exit(1);
+}
+$tailleBulletin = $g['ballot_size'];
 $nom = array();
 foreach (array_merge($g['voters'], $g['thirdparties']) as $x) {
-	if (is_array($x) && isset($x['name'])) {
+	if (is_array($x) && isset($x['id'], $x['name'])) {
 		$nom[$x['id']] = $x['name'];
 	}
 }
@@ -239,9 +246,21 @@ foreach ($f['votes'] as $v) {
 	$json = json_encode(array('ciphertext' => $v['ciphertext'], 'prev_hash' => $prev, 'seq' => $v['seq']), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 	$ok = ($v['prev_hash'] === $prev && hash('sha256', $json) === $v['hash']);
 	echo 'Vote ', $v['seq'], ' : chaîne ', $ok ? 'intacte' : 'ALTÉRÉE', "\n";
-	$b = json_decode((string) sodium_crypto_box_seal_open(base64_decode($v['ciphertext']), $kp), true);
+	// Le bulletin en clair est bourré (sodium_pad) à exactement ballot_size
+	// octets : toute autre taille, ou un débourrage qui échoue, est une
+	// anomalie et est traitée comme un bulletin illisible.
+	$padded = sodium_crypto_box_seal_open(base64_decode($v['ciphertext']), $kp);
+	$b = null;
+	if ($padded !== false && strlen($padded) === $tailleBulletin) {
+		try {
+			$clair = sodium_unpad($padded, $tailleBulletin);
+			$b = json_decode($clair, true);
+		} catch (SodiumException $e) {
+			$b = null;
+		}
+	}
 	if (!is_array($b)) {
-		echo "  illisible avec cette clé\n";
+		echo "  illisible avec cette clé, ou taille inattendue une fois déchiffré (fichier ou clé invalide)\n";
 	} else {
 		echo '  ', $n($b['fk_user']), ', le ', $b['date'], "\n";
 		foreach ($b['points'] as $p) {

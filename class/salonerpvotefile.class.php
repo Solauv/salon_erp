@@ -44,10 +44,13 @@ class SalonerpVoteFile
 	 * could be read). When readable, it also holds:
 	 *  - 'file': campaign ref, generation date, number of votes;
 	 *  - 'checks': list of {label, ok, detail}, translated;
-	 *  - 'voters' / 'thirdparties': names by id, taken from the file's own
-	 *    genesis (ids only for a genesis written before names were added);
-	 *  - 'ballots': decrypted votes, or null when no key was given;
+	 *  - 'voters' / 'thirdparties': names by id, taken from the file's own genesis;
+	 *  - 'ballots': decrypted votes, or null when no key was given, or when the
+	 *    genesis carries no ballot_size (see 'decrypt_error' then);
 	 *  - 'decrypt_error': translated reason the key could not be used, or ''.
+	 *
+	 * No compatibility: a genesis with no ballot_size
+	 * fails its own dedicated check and is never decrypted, whatever the key.
 	 *
 	 * @param	string								$json			File content
 	 * @param	string								$privateKeyB64	Revealed private key, '' to only check integrity
@@ -66,6 +69,7 @@ class SalonerpVoteFile
 			return array('fatal' => $langs->trans('ErrorVoteFileInvalid', $file));
 		}
 		$genesis = json_decode($file['genesis_payload'], true);
+		$ballotSize = (is_array($genesis) && isset($genesis['ballot_size']) && is_int($genesis['ballot_size']) && $genesis['ballot_size'] > 0) ? $genesis['ballot_size'] : null;
 
 		$report = array(
 			'fatal' => '',
@@ -99,6 +103,29 @@ class SalonerpVoteFile
 			'detail' => $langs->trans($genesisOk ? 'VoteFileCheckGenesisOk' : 'VoteFileCheckGenesisKo'),
 		);
 
+		// Every ciphertext must be exactly ballot_size + the sealed box overhead:
+		// checked without any key, so a voter can see during the vote that no
+		// ballot's length gives anything away.
+		$sizeOk = ($ballotSize !== null);
+		if (!$sizeOk) {
+			$sizeDetail = $langs->trans('VoteFileCheckBallotSizeMissing');
+		} else {
+			$sealedSize = $ballotSize + SODIUM_CRYPTO_BOX_SEALBYTES;
+			$sizeDetail = $langs->trans('VoteFileCheckBallotSizeOk', $sealedSize);
+			foreach ($file['votes'] as $vote) {
+				if (strlen((string) base64_decode($vote['ciphertext'], true)) !== $sealedSize) {
+					$sizeOk = false;
+					$sizeDetail = $langs->trans('VoteFileCheckBallotSizeKo', (int) $vote['seq'], $sealedSize);
+					break;
+				}
+			}
+		}
+		$report['checks'][] = array(
+			'label' => $langs->trans('VoteFileCheckBallotSize'),
+			'ok' => $sizeOk,
+			'detail' => $sizeDetail,
+		);
+
 		$chainError = Campaign::verifyChain($file['genesis_payload'], $file['genesis_hash'], $file['votes']);
 		$report['checks'][] = array(
 			'label' => $langs->trans('VoteFileCheckChain'),
@@ -112,10 +139,12 @@ class SalonerpVoteFile
 
 		if ($privateKeyB64 !== '') {
 			$publicKey = isset($genesis['public_key']) ? (string) $genesis['public_key'] : '';
-			if (!Campaign::checkPrivateKey($privateKeyB64, $publicKey)) {
+			if ($ballotSize === null) {
+				$report['decrypt_error'] = $langs->trans('ErrorCampaignGenesisMissingBallotSize');
+			} elseif (!Campaign::checkPrivateKey($privateKeyB64, $publicKey)) {
 				$report['decrypt_error'] = $langs->trans('ErrorCampaignPrivateKeyMismatch');
 			} else {
-				$report['ballots'] = self::openBallots($file['votes'], $privateKeyB64, $publicKey, isset($genesis['ref']) ? (string) $genesis['ref'] : '');
+				$report['ballots'] = self::openBallots($file['votes'], $privateKeyB64, $publicKey, isset($genesis['ref']) ? (string) $genesis['ref'] : '', $ballotSize);
 			}
 		}
 
@@ -215,25 +244,42 @@ class SalonerpVoteFile
 	}
 
 	/**
-	 * Open each sealed vote of the file.
+	 * Open each sealed vote of the file. After seal_open(), the plaintext's
+	 * length must be exactly $ballotSize and sodium_unpad() must succeed: any
+	 * other outcome is an anomaly (wrong ballot_size, tampered padding), not a
+	 * key mismatch, and the vote is flagged unreadable just the same.
 	 *
 	 * @param	array<array{seq:int,prev_hash:string,ciphertext:string,hash:string}>	$votes	The file's votes
 	 * @param	string	$privateKeyB64	Private key, already checked against the public key
 	 * @param	string	$publicKeyB64	Public key from the file's genesis
 	 * @param	string	$ref			Campaign ref from the file's genesis
+	 * @param	int		$ballotSize		ballot_size from the file's genesis, already checked to be a positive int
 	 * @return	array<array{seq:int,error:string,fk_user?:int,date?:string,points?:array<array{0:int,1:int}>}>
 	 */
-	protected static function openBallots(array $votes, string $privateKeyB64, string $publicKeyB64, string $ref): array
+	protected static function openBallots(array $votes, string $privateKeyB64, string $publicKeyB64, string $ref, int $ballotSize): array
 	{
 		global $langs;
 
 		$keypair = sodium_crypto_box_keypair_from_secretkey_and_publickey((string) base64_decode($privateKeyB64, true), (string) base64_decode($publicKeyB64, true));
 		$ballots = array();
 		foreach ($votes as $vote) {
-			$plain = sodium_crypto_box_seal_open((string) base64_decode($vote['ciphertext'], true), $keypair);
+			$padded = sodium_crypto_box_seal_open((string) base64_decode($vote['ciphertext'], true), $keypair);
+			$plain = false;
+			$wrongSize = false;
+			if ($padded !== false) {
+				if (strlen($padded) !== $ballotSize) {
+					$wrongSize = true;
+				} else {
+					try {
+						$plain = sodium_unpad($padded, $ballotSize);
+					} catch (\SodiumException $e) {
+						$wrongSize = true;
+					}
+				}
+			}
 			$ballot = ($plain === false) ? null : json_decode($plain, true);
 			if (!is_array($ballot) || !isset($ballot['seq'], $ballot['fk_user'], $ballot['date'], $ballot['points'], $ballot['campaign'])) {
-				$ballots[] = array('seq' => $vote['seq'], 'error' => $langs->trans('VoteFileBallotUnreadable'));
+				$ballots[] = array('seq' => $vote['seq'], 'error' => $langs->trans($wrongSize ? 'VoteFileBallotWrongSize' : 'VoteFileBallotUnreadable'));
 				continue;
 			}
 			$error = '';
@@ -249,9 +295,8 @@ class SalonerpVoteFile
 	}
 
 	/**
-	 * Names by id from a genesis list. Handles both genesis formats: objects
-	 * {id, name, ...} and, for campaigns validated before names were added,
-	 * bare [id, points] pairs or bare ids (no name then).
+	 * Names by id from a genesis list: objects {id, name, ...} only. No
+	 * compatibility with a genesis frozen before names were added.
 	 *
 	 * @param	array<mixed>	$list	genesis.voters or genesis.thirdparties
 	 * @return	array<int,string>		Name by id ('' when the genesis has none)
@@ -262,10 +307,6 @@ class SalonerpVoteFile
 		foreach ($list as $item) {
 			if (is_array($item) && isset($item['id'])) {
 				$names[(int) $item['id']] = isset($item['name']) ? (string) $item['name'] : '';
-			} elseif (is_array($item) && isset($item[0])) {
-				$names[(int) $item[0]] = '';
-			} elseif (is_int($item)) {
-				$names[$item] = '';
 			}
 		}
 

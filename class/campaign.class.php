@@ -909,10 +909,11 @@ class Campaign extends CommonObject
 	 * @param	array<int,array{id:int,name:string,points:int}>	$voters			Voters with their name and envelope, any order
 	 * @param	array<int,array{id:int,name:?string,code_client:?string,zip:?string,town:?string}>	$thirdparties	Snapshot of the frozen thirdparty list, any order
 	 * @param	array{category:string,group:string,creator:string}	$names	Tag label, group name and creator name as at validation
+	 * @param	int		$ballotSize		Worst-case ballot plaintext size, in bytes, computed by computeBallotSize(): every ballot of this campaign is padded (sodium_pad()) to exactly this many bytes before sealing, so a ciphertext's length never leaks how a vote was cast
 	 * @return	string	JSON-encoded canonical payload
 	 * @throws	\JsonException	If the payload cannot be JSON-encoded
 	 */
-	public function getGenesisPayload(array $voters, array $thirdparties, array $names)
+	public function getGenesisPayload(array $voters, array $thirdparties, array $names, int $ballotSize)
 	{
 		global $conf;
 
@@ -945,6 +946,7 @@ class Campaign extends CommonObject
 		});
 
 		$payload = array(
+			'ballot_size' => $ballotSize,
 			'category' => array('id' => (int) $this->fk_category, 'label' => (string) $names['category']),
 			'creator' => array('id' => (int) $this->fk_user_creat, 'name' => (string) $names['creator']),
 			'date_end' => gmdate('Y-m-d\TH:i:s\Z', (int) $this->date_end),
@@ -961,6 +963,96 @@ class Campaign extends CommonObject
 		ksort($payload);
 
 		return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+	}
+
+	/**
+	 * Canonical JSON of one ballot's plaintext: {"campaign","date","fk_user",
+	 * "points","seq"} with sorted keys, unescaped slashes/unicode. This is the
+	 * SOLE place that builds this string: castVote() calls it to seal the real
+	 * ballot, computeBallotSize() calls it to measure the campaign's worst
+	 * case. They must never diverge, or a ciphertext's padded length would
+	 * stop matching the genesis's ballot_size.
+	 *
+	 * @param	string							$ref		Campaign ref
+	 * @param	int								$timestamp	Unix timestamp of the vote; gmdate() always encodes 'date' on the same 20 bytes, whatever this value is
+	 * @param	int								$fkUser		Voting user id
+	 * @param	array<int,array{0:int,1:int}>	$pairs		[thirdparty id, points] pairs, zero allocations already dropped, any order
+	 * @param	int								$seq		Rank of the vote in the chain
+	 * @return	string							JSON-encoded ballot plaintext
+	 * @throws	\JsonException					If the payload cannot be JSON-encoded
+	 */
+	public static function buildBallotPlaintext(string $ref, int $timestamp, int $fkUser, array $pairs, int $seq): string
+	{
+		return json_encode(array(
+			'campaign' => $ref,
+			'date' => gmdate('Y-m-d\TH:i:s\Z', $timestamp),
+			'fk_user' => $fkUser,
+			'points' => array_values($pairs),
+			'seq' => $seq,
+		), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+	}
+
+	/**
+	 * Worst-case size, in bytes, of this campaign's ballot plaintext: a true
+	 * majorant, computed once at validation and frozen into the genesis
+	 * ('ballot_size'). It assumes, all at once:
+	 *  - every tier of the frozen list is bid on (a real ballot only lists the
+	 *    ones it bids on, zero allocations dropped: never more than all of them);
+	 *  - every one of those bids equals the largest envelope of the campaign
+	 *    (a real bid is at most its own voter's envelope, itself at most the
+	 *    largest one, whatever tier it lands on);
+	 *  - the voter is the one with the largest id (a real fk_user is one of
+	 *    the campaign's voters, at most the largest of their ids);
+	 *  - seq is the number of voters (each voter votes at most once, so no
+	 *    real seq ever exceeds that count);
+	 *  - 'date' is always 20 bytes, whatever the instant: any value does.
+	 * castVote() then pads every real plaintext up to this exact size with
+	 * sodium_pad(), so a ciphertext's length no longer depends on how many
+	 * tiers were bid on, how large the bids were, or who voted.
+	 *
+	 * @param	int[]			$thirdpartyIds	Frozen thirdparty ids
+	 * @param	array<int,int>	$pointsByUser	Voters' envelopes, keyed by user id (never empty: validate() already refuses an empty voter list before this is called)
+	 * @return	int				Ballot size, in bytes: strictly greater than the worst-case plaintext computed here
+	 * @throws	\JsonException
+	 */
+	public function computeBallotSize(array $thirdpartyIds, array $pointsByUser): int
+	{
+		$maxEnvelope = empty($pointsByUser) ? 0 : max($pointsByUser);
+		$maxUserId = empty($pointsByUser) ? 0 : max(array_keys($pointsByUser));
+
+		$ids = array_map('intval', $thirdpartyIds);
+		sort($ids);
+		$pairs = array();
+		foreach ($ids as $socId) {
+			$pairs[] = array($socId, $maxEnvelope);
+		}
+
+		// The exact instant does not matter (gmdate() output is fixed-length),
+		// but a real one keeps this reproducible and avoids relying on 0.
+		$worstCase = self::buildBallotPlaintext((string) $this->ref, (int) $this->date_end, $maxUserId, $pairs, count($pointsByUser));
+
+		// sodium_pad($plaintext, $ballotSize) pads up to the smallest multiple
+		// of $ballotSize strictly greater than strlen($plaintext): with the
+		// worst case one byte under $ballotSize, that multiple is always
+		// $ballotSize itself, for every real (smaller) ballot too.
+		return strlen($worstCase) + 1;
+	}
+
+	/**
+	 * The ballot_size fixed by this campaign's stored genesis. Never
+	 * recomputed: it is read back exactly as validate() froze it, the sole
+	 * size to which castVote()/openBallots() pad or unpad every ballot.
+	 *
+	 * @return	?int	Ballot size, or null if the stored genesis has none (a genesis frozen before this size existed: refused everywhere, see README)
+	 */
+	protected function genesisBallotSize(): ?int
+	{
+		$genesis = json_decode((string) $this->genesis_payload, true);
+		if (!is_array($genesis) || !isset($genesis['ballot_size']) || !is_int($genesis['ballot_size']) || $genesis['ballot_size'] <= 0) {
+			return null;
+		}
+
+		return $genesis['ballot_size'];
 	}
 
 	/**
@@ -1120,7 +1212,8 @@ class Campaign extends CommonObject
 		list($namedVoters, $names) = $this->getGenesisNames($pointsByUser);
 
 		try {
-			$this->genesis_payload = $this->getGenesisPayload($namedVoters, $snapshot, $names);
+			$ballotSize = $this->computeBallotSize(array_keys($snapshot), $pointsByUser);
+			$this->genesis_payload = $this->getGenesisPayload($namedVoters, $snapshot, $names, $ballotSize);
 		} catch (\JsonException $e) {
 			$this->errors[] = $langs->trans('ErrorCampaignGenesisPayloadEncoding');
 			sodium_memzero($privateKeyB64);
@@ -1454,6 +1547,16 @@ class Campaign extends CommonObject
 			return -1;
 		}
 
+		// No compatibility: a genesis frozen before ballot_size existed cannot
+		// be padded to a size it never fixed, so voting on it is refused
+		// outright, same as reveal() and SalonerpVoteFile::analyse().
+		$ballotSize = $this->genesisBallotSize();
+		if ($ballotSize === null) {
+			$this->errors[] = $langs->trans('ErrorCampaignGenesisMissingBallotSize');
+			$this->db->rollback();
+			return -1;
+		}
+
 		$now = dol_now();
 		if ($now < (int) $this->date_start || $now >= (int) $this->date_end) {
 			$this->errors[] = $langs->trans('ErrorCampaignVoteOutsideWindow', dol_print_date($this->date_start, 'dayhour', 'tzuserrel'), dol_print_date($this->date_end, 'dayhour', 'tzuserrel'));
@@ -1541,16 +1644,24 @@ class Campaign extends CommonObject
 		foreach ($ballot as $socId => $points) {
 			$pairs[] = array($socId, $points);
 		}
-		$plaintext = json_encode(array(
-			'campaign' => (string) $this->ref,
-			'date' => gmdate('Y-m-d\TH:i:s\Z', $now),
-			'fk_user' => (int) $user->id,
-			'points' => $pairs,
-			'seq' => $seq,
-		), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-		$publicKey = base64_decode((string) $this->public_key, true);
-		$ciphertext = base64_encode(sodium_crypto_box_seal($plaintext, (string) $publicKey));
+		$plaintext = self::buildBallotPlaintext((string) $this->ref, (int) $now, (int) $user->id, $pairs, $seq);
+		// Guard, never expected to trigger: computeBallotSize() at validation
+		// time is a true majorant of every ballot this method can ever build.
+		if (strlen($plaintext) >= $ballotSize) {
+			$this->errors[] = $langs->trans('ErrorCampaignBallotExceedsSize');
+			sodium_memzero($plaintext);
+			$this->db->rollback();
+			return -1;
+		}
+		// sodium_pad() with blockSize = $ballotSize pads to the next multiple
+		// of $ballotSize strictly above strlen($plaintext): since that length
+		// is < $ballotSize, the result is always exactly $ballotSize bytes,
+		// whatever the ballot. That is what hides its shape in the ciphertext.
+		$padded = sodium_pad($plaintext, $ballotSize);
 		sodium_memzero($plaintext);
+		$publicKey = base64_decode((string) $this->public_key, true);
+		$ciphertext = base64_encode(sodium_crypto_box_seal($padded, (string) $publicKey));
+		sodium_memzero($padded);
 		$hash = self::computeVoteHash($seq, $prevHash, $ciphertext);
 
 		$sql = "INSERT INTO ".$this->db->prefix()."salonerp_campaign_vote";
@@ -1673,6 +1784,11 @@ class Campaign extends CommonObject
 	/**
 	 * Open every sealed ballot of the chain with a private key, and check each
 	 * one against its database row: same rank, same voter, same campaign.
+	 * Refuses outright if the stored genesis carries no ballot_size (a
+	 * non-compliant genesis: no compatibility). Otherwise, after
+	 * sealed_box_open(), the plaintext's length must be exactly ballot_size
+	 * and sodium_unpad() must succeed: any other outcome is an anomaly, not a
+	 * key mismatch, and is refused the same way as an unreadable ballot.
 	 *
 	 * @param	string	$privateKeyB64	Base64 private key of the campaign
 	 * @return	array<array{seq:int,fk_user:int,date:string,points:array<array{0:int,1:int}>}>|int<-1,-1>	Ballots by seq, or -1 (reason in ->error)
@@ -1680,6 +1796,12 @@ class Campaign extends CommonObject
 	protected function openBallots(string $privateKeyB64)
 	{
 		global $langs;
+
+		$ballotSize = $this->genesisBallotSize();
+		if ($ballotSize === null) {
+			$this->error = $langs->trans('ErrorCampaignGenesisMissingBallotSize');
+			return -1;
+		}
 
 		$sql = "SELECT seq, fk_user, ciphertext FROM ".$this->db->prefix()."salonerp_campaign_vote";
 		$sql .= " WHERE fk_campaign = ".((int) $this->id)." ORDER BY seq ASC";
@@ -1693,10 +1815,25 @@ class Campaign extends CommonObject
 		$ballots = array();
 		$error = '';
 		while ($obj = $this->db->fetch_object($resql)) {
-			$plain = sodium_crypto_box_seal_open((string) base64_decode((string) $obj->ciphertext, true), $keypair);
+			$padded = sodium_crypto_box_seal_open((string) base64_decode((string) $obj->ciphertext, true), $keypair);
+			$plain = false;
+			$wrongSize = false;
+			if ($padded !== false) {
+				if (strlen($padded) !== $ballotSize) {
+					$wrongSize = true;
+				} else {
+					try {
+						$plain = sodium_unpad($padded, $ballotSize);
+					} catch (\SodiumException $e) {
+						$wrongSize = true;
+					}
+				}
+			}
 			$ballot = ($plain === false) ? null : json_decode($plain, true);
 			if (!is_array($ballot)) {
-				$error = $langs->trans('ErrorCampaignBallotUnreadable', (int) $obj->seq);
+				$error = $wrongSize
+					? $langs->trans('ErrorCampaignBallotWrongSize', (int) $obj->seq)
+					: $langs->trans('ErrorCampaignBallotUnreadable', (int) $obj->seq);
 				break;
 			}
 			if ((int) $ballot['seq'] !== (int) $obj->seq || (int) $ballot['fk_user'] !== (int) $obj->fk_user || (string) $ballot['campaign'] !== (string) $this->ref) {

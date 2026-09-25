@@ -260,6 +260,12 @@ disputer le même rang.
 - **Chiffrement des votes** : *sealed box* libsodium (`sodium_crypto_box_seal`) avec la
   clé publique. Seule la clé privée ouvre un vote ; le votant lui-même ne peut plus le
   relire.
+- **Bourrage à taille fixe** : avant scellement, le bulletin en clair est bourré
+  (`sodium_pad`) à une taille fixe par campagne, `ballot_size`, inscrite dans la genèse.
+  Tous les chiffrés d'une même campagne ont ainsi exactement la même longueur : le
+  fichier des votes, téléchargé par tous pendant le vote, ne fuit ni le nombre de tiers
+  misés, ni la taille des mises, ni l'identité du votant. Voir « La genèse » et « Les
+  votes et la chaîne ».
 - **Vérification de la clé ressaisie** : la clé publique est dérivée de la clé privée
   proposée et comparée à celle stockée, en temps constant (`hash_equals`).
 - **Empreintes** : SHA-256, en hexadécimal minuscule.
@@ -276,6 +282,7 @@ Toute information publique y figure **nommée**, jamais par un id seul :
 
 ```json
 {
+  "ballot_size": 214,
   "category": {"id": 538, "label": "Salon 2026"},
   "creator": {"id": 535, "name": "Alice Recette"},
   "date_end": "2026-09-26T16:00:00Z",
@@ -291,17 +298,34 @@ Toute information publique y figure **nommée**, jamais par un id seul :
 }
 ```
 
-Les campagnes validées avant l'ajout des noms ont une genèse plus ancienne : votants en
-paires `[id, points]`, sans nom. Elle reste vérifiable, et les outils de déchiffrement la
-lisent.
+`ballot_size` fixe, en octets, la taille à laquelle chaque bulletin en clair est bourré
+avant chiffrement (voir « Les votes et la chaîne »). Calculée à la validation par
+`Campaign::computeBallotSize()`, sur le pire cas — un vrai majorant, jamais reconstruit
+ensuite : *tous* les tiers de la liste figée misés à la fois, chacun à la plus grande
+enveloppe de points parmi les votants, par le votant dont l'id est le plus grand, au rang
+le plus élevé atteignable (le nombre de votants). `getGenesisPayload()` reçoit cette
+taille toute faite ; elle ne recalcule rien. Aucune campagne validée sans `ballot_size`
+n'est utilisable : voir « Sécurité ».
 
 ## Les votes et la chaîne
 
-Contenu chiffré d'un vote (JSON) :
+Contenu en clair d'un vote (JSON), produit par `Campaign::buildBallotPlaintext()`, seul
+endroit qui construit cette chaîne — `castVote()` l'appelle pour le vrai bulletin,
+`computeBallotSize()` pour le pire cas de la campagne, afin qu'ils ne divergent jamais :
 
 ```json
 {"campaign": "SALON-2026", "date": "2026-09-24T08:04:13Z", "fk_user": 535, "points": [[427, 50], [428, 50]], "seq": 1}
 ```
+
+Les tiers à 0 point sont retirés du bulletin avant encodage. Avant scellement
+(`sodium_crypto_box_seal`), ce JSON est bourré à taille fixe : `sodium_pad($clair,
+$ballot_size)`, où `$ballot_size` est relu tel quel dans la genèse stockée de la
+campagne, jamais recalculé. Toutes les longueurs de bulletin étant inférieures au pire
+cas qui a servi à fixer `ballot_size` (garde-fou : `castVote()` refuse sinon, ce qui ne
+doit jamais arriver), le bourrage porte toujours le clair à exactement `ballot_size`
+octets : deux votes d'une même campagne, si différents soient leurs bulletins, produisent
+des chiffrés de longueur identique. Le clair bourré est effacé de la mémoire
+(`sodium_memzero`) aussitôt après scellement.
 
 Chaque vote est ensuite chaîné :
 
@@ -334,14 +358,21 @@ Produit par `Campaign::buildVoteFile()`, format `salonerp-votes/1` :
 | `last_hash` | empreinte finale de la chaîne |
 
 Le téléchargement est réservé aux votants et est exigé (en session) avant de voter.
+`genesis_payload` porte `ballot_size` : c'est la seule source de cette taille pour qui
+ouvre le fichier, elle n'est jamais recalculée par un outil de déchiffrement.
 
 ## Révélation et dépouillement
 
 `reveal()`, sous verrou, dans cet ordre : statut « Vote terminé », créateur, clé valide,
-`verifyChain()` sur toute la chaîne, ouverture de chaque vote et **rapprochement avec sa
-ligne** (même rang, même votant, même campagne — ce qui détecte un `fk_user` échangé en
-base, invisible pour la chaîne). Seulement ensuite : calcul, écriture des résultats,
-stockage de la clé et passage au statut « Révélée ». Toute erreur annule la transaction.
+`ballot_size` présent dans la genèse stockée (sinon refus immédiat : la genèse n'est pas
+conforme), `verifyChain()` sur toute la chaîne, ouverture
+de chaque vote et **rapprochement avec sa ligne** (même rang, même votant, même campagne
+— ce qui détecte un `fk_user` échangé en base, invisible pour la chaîne). À l'ouverture,
+après `sodium_crypto_box_seal_open()`, le clair obtenu doit faire exactement
+`ballot_size` octets et `sodium_unpad()` doit réussir ; tout écart est traité comme un
+vote illisible, révélation refusée. Seulement si tout tient : calcul, écriture des
+résultats, stockage de la clé et passage au statut « Révélée ». Toute erreur annule la
+transaction.
 
 `Campaign::computeResults()` est une fonction pure (aucun accès à la base) : plus forte
 mise ; puis règle B, comparée en entiers exacts (`a₁ × e₂` contre `a₂ × e₁`) ; puis
@@ -361,10 +392,16 @@ sont ignorés et signalés. Tout ou rien.
 `SalonerpVoteFile::analyse($json, $privateKey = '', $expected = null, $official = null)`
 ne touche pas à la base : lecture stricte (format, types, hexadécimal, base64, 5 Mo au
 plus), campagne attendue (même `genesis_hash`), intégrité de la genèse et de la chaîne,
-comparaison **vote par vote, en entier** avec la chaîne officielle (un fichier plus ancien
-en est le début ; sinon, rang de la première divergence), puis déchiffrement si une clé
-valide est fournie. L'onglet Déchiffrer lui passe la campagne et sa chaîne ; le
-déchiffrement externe, rien d'autre que le fichier et la clé.
+taille des bulletins (un contrôle à part entière, **sans clé** : la genèse doit porter
+un `ballot_size` valide, et chaque chiffré doit faire exactement `ballot_size + 48`
+octets ; sinon le fichier est signalé non conforme, et une genèse sans `ballot_size`
+n'est jamais déchiffrée, quelle que soit la clé fournie), comparaison **vote par vote, en entier** avec la chaîne
+officielle (un fichier plus ancien en est le début ; sinon, rang de la première
+divergence), puis déchiffrement si une clé valide est fournie. Chaque vote ouvert est
+soumis au même contrôle de taille que `reveal()` (`ballot_size` exact, `sodium_unpad()`
+réussi) ; un vote qui y échoue est signalé, sans faire échouer les autres. L'onglet
+Déchiffrer lui passe la campagne et sa chaîne ; le déchiffrement externe, rien d'autre
+que le fichier et la clé.
 
 ## Sécurité
 
