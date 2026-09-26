@@ -34,8 +34,14 @@ class SalonerpVoteFile
 	/** Largest vote file accepted, in bytes. */
 	const MAX_SIZE = 5242880;
 
+	/** Largest receipt accepted, in bytes: a single ballot, nowhere near 5 MB. */
+	const MAX_RECEIPT_SIZE = 1048576;
+
 	/** Format written by Campaign::buildVoteFile(). */
 	const FORMAT = 'salonerp-votes/1';
+
+	/** Format written by Campaign::buildReceipt(). */
+	const RECEIPT_FORMAT = 'salonerp-receipt/1';
 
 	/**
 	 * Analyse a vote file.
@@ -47,7 +53,9 @@ class SalonerpVoteFile
 	 *  - 'voters' / 'thirdparties': names by id, taken from the file's own genesis;
 	 *  - 'ballots': decrypted votes, or null when no key was given, or when the
 	 *    genesis carries no ballot_size (see 'decrypt_error' then);
-	 *  - 'decrypt_error': translated reason the key could not be used, or ''.
+	 *  - 'decrypt_error': translated reason the key could not be used, or '';
+	 *  - 'receipt': null when $receiptJson is '', else the receipt check (see
+	 *    checkReceipt()) — needs no campaign key, works during the vote.
 	 *
 	 * No compatibility: a genesis with no ballot_size
 	 * fails its own dedicated check and is never decrypted, whatever the key.
@@ -56,9 +64,10 @@ class SalonerpVoteFile
 	 * @param	string								$privateKeyB64	Revealed private key, '' to only check integrity
 	 * @param	?array{ref:string,genesis_hash:string}	$expected	Campaign the file must belong to, null outside it
 	 * @param	?array<array{seq:int,prev_hash:string,ciphertext:string,hash:string}>	$official	Official chain, null when not available
+	 * @param	string								$receiptJson	Receipt content to check against this file, '' to skip
 	 * @return	array<string,mixed>					Report, see above
 	 */
-	public static function analyse(string $json, string $privateKeyB64 = '', ?array $expected = null, ?array $official = null): array
+	public static function analyse(string $json, string $privateKeyB64 = '', ?array $expected = null, ?array $official = null, string $receiptJson = ''): array
 	{
 		global $langs;
 
@@ -84,6 +93,7 @@ class SalonerpVoteFile
 			'thirdparties' => self::namesById(isset($genesis['thirdparties']) ? $genesis['thirdparties'] : array()),
 			'ballots' => null,
 			'decrypt_error' => '',
+			'receipt' => null,
 		);
 
 		$sameCampaign = true;
@@ -146,6 +156,11 @@ class SalonerpVoteFile
 			} else {
 				$report['ballots'] = self::openBallots($file['votes'], $privateKeyB64, $publicKey, isset($genesis['ref']) ? (string) $genesis['ref'] : '', $ballotSize);
 			}
+		}
+
+		if ($receiptJson !== '') {
+			$fileOk = $genesisOk && $sizeOk && $chainError === '';
+			$report['receipt'] = self::checkReceipt($receiptJson, $file, is_array($genesis) ? $genesis : null, $ballotSize, $fileOk);
 		}
 
 		return $report;
@@ -311,5 +326,188 @@ class SalonerpVoteFile
 		}
 
 		return $names;
+	}
+
+	/**
+	 * Check a voter's receipt (Campaign::buildReceipt()) against an already
+	 * structurally-parsed vote file: does it prove that the vote of its own
+	 * seq, in this very file, holds exactly its own ballot? No campaign key is
+	 * ever needed, since the receipt already carries the one-time eph_sk that
+	 * sealed that single vote: this is what lets a voter check their receipt
+	 * WHILE the campaign is still open, long before any reveal.
+	 *
+	 * 'verdict' is true only when every check below holds:
+	 *  - the file itself is intact (genesis, ballot sizes, chain);
+	 *  - the receipt's genesis_hash is the file's;
+	 *  - its seq is a rank actually present in the file, under its chain hash;
+	 *  - its 'ballot', decoded, names this same campaign and this same seq
+	 *    (a ballot copy-pasted from another vote or campaign is caught here);
+	 *  - strlen('ballot') is strictly under the file's genesis ballot_size
+	 *    (else sealBallot() could not have padded it the way castVote() does);
+	 *  - Campaign::sealBallot() of the padded ballot, the genesis public_key
+	 *    and the receipt's eph_sk reproduces, byte for byte, the ciphertext of
+	 *    that very vote in the file.
+	 * A single mismatch anywhere yields 'verdict' => false: the receipt proves
+	 * nothing, without accusing anyone of anything (a rejected receipt is not
+	 * evidence of forgery either: it just proves nothing).
+	 *
+	 * @param	string								$receiptJson	Receipt content
+	 * @param	array{campaign:string,genesis_hash:string,genesis_payload:string,votes:array<array{seq:int,prev_hash:string,ciphertext:string,hash:string}>}	$file	Already-parsed vote file (see parse())
+	 * @param	?array<string,mixed>				$genesis		Decoded genesis payload of the file, or null
+	 * @param	?int								$ballotSize		genesis.ballot_size, already validated to be a positive int, or null
+	 * @param	bool								$fileOk			Whether the file itself is intact (genesis, ballot sizes, chain): no verdict otherwise
+	 * @return	array{fatal:string,verdict:?bool,seq:?int,last_hash?:string,checks:array<array{label:string,ok:bool,detail:string}>,ballot:?array<string,mixed>}
+	 */
+	protected static function checkReceipt(string $receiptJson, array $file, ?array $genesis, ?int $ballotSize, bool $fileOk): array
+	{
+		global $langs;
+
+		$receipt = self::parseReceipt($receiptJson);
+		if (is_string($receipt)) {
+			return array('fatal' => $langs->trans('ErrorReceiptInvalid', $receipt), 'verdict' => null, 'seq' => null, 'checks' => array(), 'ballot' => null);
+		}
+
+		$checks = array();
+
+		// A receipt is only compared with an intact file: genesis, ballot sizes
+		// and chain must all check out first.
+		$checks[] = array(
+			'label' => $langs->trans('ReceiptCheckFile'),
+			'ok' => $fileOk,
+			'detail' => $langs->trans($fileOk ? 'ReceiptCheckFileOk' : 'ReceiptCheckFileKo'),
+		);
+
+		$genesisOk = hash_equals($file['genesis_hash'], $receipt['genesis_hash']);
+		$checks[] = array(
+			'label' => $langs->trans('ReceiptCheckGenesis'),
+			'ok' => $genesisOk,
+			'detail' => $langs->trans($genesisOk ? 'ReceiptCheckGenesisOk' : 'ReceiptCheckGenesisKo'),
+		);
+
+		$vote = null;
+		foreach ($file['votes'] as $v) {
+			if ((int) $v['seq'] === $receipt['seq']) {
+				$vote = $v;
+				break;
+			}
+		}
+		// The vote must be there, under the very chain hash the receipt holds.
+		$seqOk = ($vote !== null) && hash_equals((string) $vote['hash'], $receipt['hash']);
+		$checks[] = array(
+			'label' => $langs->trans('ReceiptCheckSeq'),
+			'ok' => $seqOk,
+			'detail' => $seqOk ? $langs->trans('ReceiptCheckSeqOk', $receipt['seq']) : $langs->trans('ReceiptCheckSeqKo', $receipt['seq']),
+		);
+
+		$ballotData = json_decode($receipt['ballot'], true);
+		$ballotOk = is_array($ballotData) && isset($ballotData['campaign'], $ballotData['seq'])
+			&& (string) $ballotData['campaign'] === (string) $file['campaign']
+			&& (int) $ballotData['seq'] === $receipt['seq'];
+		$checks[] = array(
+			'label' => $langs->trans('ReceiptCheckBallotIdentity'),
+			'ok' => $ballotOk,
+			'detail' => $langs->trans($ballotOk ? 'ReceiptCheckBallotIdentityOk' : 'ReceiptCheckBallotIdentityKo'),
+		);
+
+		$sizeOk = ($ballotSize !== null) && (strlen($receipt['ballot']) < $ballotSize);
+		$checks[] = array(
+			'label' => $langs->trans('ReceiptCheckSize'),
+			'ok' => $sizeOk,
+			'detail' => $sizeOk ? $langs->trans('ReceiptCheckSizeOk') : $langs->trans('ReceiptCheckSizeKo'),
+		);
+
+		$matchOk = false;
+		$matchRun = $fileOk && $genesisOk && $seqOk && $ballotOk && $sizeOk && is_array($genesis) && isset($genesis['public_key']);
+		if ($matchRun) {
+			$publicKey = (string) base64_decode((string) $genesis['public_key'], true);
+			$ephemeralSecret = (string) base64_decode($receipt['ephemeral_key'], true);
+			try {
+				$padded = sodium_pad($receipt['ballot'], $ballotSize);
+				$recomputed = base64_encode(Campaign::sealBallot($padded, $publicKey, $ephemeralSecret));
+				$matchOk = hash_equals((string) $vote['ciphertext'], $recomputed);
+			} catch (\SodiumException $e) {
+				$matchOk = false;
+			}
+		}
+		$checks[] = array(
+			'label' => $langs->trans('ReceiptCheckMatch'),
+			'ok' => $matchOk,
+			'detail' => $langs->trans($matchOk ? 'ReceiptCheckMatchOk' : ($matchRun ? 'ReceiptCheckMatchKo' : 'ReceiptCheckMatchSkipped')),
+		);
+
+		// The readable part is what the voter actually reads: it must say
+		// exactly what the verified ballot says, or the receipt was edited.
+		// Only checked once the ballot itself is proven, and then the proven
+		// vote is shown anyway, so an edited receipt is exposed, not just
+		// rejected.
+		$ballot = ($matchOk && is_array($ballotData)) ? Campaign::describeBallot($ballotData, $genesis) : null;
+		$readableOk = ($ballot !== null) && ($ballot === $receipt['ballot_decoded']);
+		$checks[] = array(
+			'label' => $langs->trans('ReceiptCheckReadable'),
+			'ok' => $readableOk,
+			'detail' => $langs->trans($readableOk ? 'ReceiptCheckReadableOk' : ($ballot !== null ? 'ReceiptCheckReadableKo' : 'ReceiptCheckMatchSkipped')),
+		);
+
+		$verdict = $fileOk && $genesisOk && $seqOk && $ballotOk && $sizeOk && $matchOk && $readableOk;
+
+		return array(
+			'fatal' => '',
+			'verdict' => $verdict,
+			'seq' => $receipt['seq'],
+			'last_hash' => empty($file['votes']) ? $file['genesis_hash'] : (string) end($file['votes'])['hash'],
+			'checks' => $checks,
+			'ballot' => $ballot,
+		);
+	}
+
+	/**
+	 * Strict structural reading of a receipt (Campaign::buildReceipt()).
+	 *
+	 * @param	string	$json	Receipt content
+	 * @return	array{genesis_hash:string,seq:int,hash:string,ballot:string,ephemeral_key:string,ballot_decoded:array<string,mixed>}|string	The receipt's checkable fields, or the (untranslated) reason it is unreadable
+	 */
+	protected static function parseReceipt(string $json)
+	{
+		if (strlen($json) > self::MAX_RECEIPT_SIZE) {
+			return 'file too large';
+		}
+		$data = json_decode($json, true);
+		if (!is_array($data)) {
+			return 'not JSON';
+		}
+		if (!isset($data['format']) || $data['format'] !== self::RECEIPT_FORMAT) {
+			return 'unknown format';
+		}
+		if (!isset($data['genesis_hash']) || !is_string($data['genesis_hash']) || !preg_match('/^[0-9a-f]{64}$/', $data['genesis_hash'])) {
+			return 'bad genesis_hash';
+		}
+		if (!isset($data['seq']) || !is_int($data['seq']) || $data['seq'] < 1) {
+			return 'bad seq';
+		}
+		if (!isset($data['hash']) || !is_string($data['hash']) || !preg_match('/^[0-9a-f]{64}$/', $data['hash'])) {
+			return 'bad hash';
+		}
+		if (!isset($data['ballot']) || !is_string($data['ballot']) || $data['ballot'] === '' || strlen($data['ballot']) > self::MAX_RECEIPT_SIZE) {
+			return 'bad ballot';
+		}
+		if (!isset($data['ephemeral_key']) || !is_string($data['ephemeral_key']) || !preg_match('/^[A-Za-z0-9+\/]+={0,2}$/', $data['ephemeral_key'])) {
+			return 'bad ephemeral_key';
+		}
+		$ephemeralSecret = base64_decode($data['ephemeral_key'], true);
+		if ($ephemeralSecret === false || strlen($ephemeralSecret) !== SODIUM_CRYPTO_BOX_SECRETKEYBYTES) {
+			return 'bad ephemeral_key length';
+		}
+		if (!isset($data['ballot_decoded']) || !is_array($data['ballot_decoded'])) {
+			return 'bad ballot_decoded';
+		}
+
+		return array(
+			'genesis_hash' => $data['genesis_hash'],
+			'seq' => $data['seq'],
+			'hash' => $data['hash'],
+			'ballot' => $data['ballot'],
+			'ephemeral_key' => $data['ephemeral_key'],
+			'ballot_decoded' => $data['ballot_decoded'],
+		);
 	}
 }

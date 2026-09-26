@@ -91,7 +91,7 @@ CampaignThirdpartyNowNamed = aujourd'hui : %s
 ConfirmValidateCampaignTitle = Valider la campagne
 ConfirmValidateCampaignText = La validation fige définitivement la campagne : plus aucune modification des dates, du tag, du groupe, des votants ou de leurs points ne sera possible. Une paire de clés est générée ; la clé privée sera affichée une seule fois juste après, elle n'est conservée nulle part par Dolibarr. Sans elle, la campagne ne pourra ni démarrer, ni être dépouillée. Confirmez-vous ?
 PrivateKeyWarningTitle = Clé privée de la campagne — à conserver maintenant
-PrivateKeyWarningText = Cette clé n'est affichée qu'une seule fois et n'est stockée nulle part par Dolibarr : sans elle, la campagne ne pourra ni démarrer ni être dépouillée. Copiez-la ou téléchargez-la avant de quitter cette page.
+PrivateKeyWarningText = Cette clé n'est affichée qu'une seule fois et n'est stockée nulle part par Dolibarr : sans elle, la campagne ne pourra ni démarrer ni être dépouillée. Le fichier de clé a été téléchargé automatiquement ; si votre navigateur l'a bloqué, utilisez le bouton Télécharger. Copiez-la aussi avant de quitter cette page.
 PrivateKeyLabel = Clé privée (base64)
 CopyPrivateKey = Copier
 CopyPrivateKeyDone = Clé copiée dans le presse-papiers
@@ -132,6 +132,52 @@ CampaignVoteTypeConfirm = Pour confirmer, tapez « %s » :
 CampaignVoteConfirmWord = confirmer
 CampaignCastVote = Voter
 CampaignVoteRecorded = Vote enregistré. Téléchargez le nouveau fichier des votes : il contient votre vote.
+
+#
+# Vote receipt (reçu de vote, "clé de litige")
+#
+ReceiptWarningTitle = Votre reçu de vote — à conserver maintenant
+ReceiptWarningText = Ce reçu prouve exactement le contenu de votre vote, même contre un code serveur modifié : il n'est affiché qu'une seule fois et n'est stocké nulle part par Dolibarr. Le reçu a été téléchargé automatiquement ; si votre navigateur l'a bloqué, utilisez le bouton Télécharger. Copiez-le aussi avant de quitter cette page. Vérifiez-le pendant que le vote est ouvert, sur le Déchiffrement externe (menu Votes) d'une AUTRE instance Dolibarr, et signalez tout écart avant la clôture du vote : passé ce délai, il sera trop tard pour agir. Un reçu qui ne correspond pas au vote enregistré ne prouve rien.
+CopyReceipt = Copier
+CopyReceiptDone = Reçu copié dans le presse-papiers
+DownloadReceipt = Télécharger le reçu (.json)
+ReceiptFile = Reçu de vote (.json, facultatif)
+ReceiptFileHelp = Remis une seule fois au moment du vote. Sa vérification ne nécessite aucune clé de campagne et fonctionne pendant le vote.
+ReceiptNotStored = Le reçu, s'il est déposé, est lui aussi lu puis oublié.
+ReceiptCheckTitle = Vérification du reçu
+ReceiptCheckFile = Fichier des votes
+ReceiptCheckFileOk = Le fichier des votes est intègre (genèse, taille des bulletins, chaîne).
+ReceiptCheckFileKo = Le fichier des votes n'est pas intègre : aucun reçu ne peut être vérifié contre lui.
+ReceiptFileAuthenticity = Ce verdict ne vaut que si le fichier des votes déposé est authentique : un faux reçu peut s'accompagner d'un faux fichier cohérent. Empreinte finale de ce fichier : %s. Comparez-la à celle d'un fichier que vous avez téléchargé vous-même sur l'instance de la campagne, ou à celle d'autres votants.
+ReceiptCheckGenesis = Campagne
+ReceiptCheckGenesisOk = Le reçu porte l'empreinte de genèse de ce fichier des votes.
+ReceiptCheckGenesisKo = Le reçu ne porte pas l'empreinte de genèse de ce fichier des votes : il appartient à une autre campagne, ou à une autre version.
+ReceiptCheckSeq = Vote n°
+ReceiptCheckSeqOk = Le vote n°%s figure bien dans ce fichier des votes.
+ReceiptCheckSeqKo = Le vote n°%s du reçu n'existe pas dans ce fichier des votes, ou n'y porte pas la même empreinte.
+ReceiptCheckBallotIdentity = Identité du bulletin
+ReceiptCheckBallotIdentityOk = Le bulletin du reçu se désigne bien lui-même par cette campagne et ce numéro de vote.
+ReceiptCheckBallotIdentityKo = Le bulletin du reçu se désigne comme appartenant à une autre campagne, ou à un autre numéro de vote : il a été déplacé ou copié depuis un autre reçu.
+ReceiptCheckSize = Taille du bulletin
+ReceiptCheckSizeOk = La longueur du bulletin est compatible avec la taille de bourrage (ballot_size) de la genèse.
+ReceiptCheckSizeKo = La longueur du bulletin dépasse (ou la genèse ne fixe pas) la taille de bourrage (ballot_size) : reçu non conforme.
+ReceiptCheckMatch = Recalcul du chiffré
+ReceiptCheckMatchOk = Le recalcul (bulletin bourré, clé publique de la genèse, clé éphémère du reçu) reproduit exactement le chiffré enregistré.
+ReceiptCheckMatchKo = Le recalcul ne reproduit pas le chiffré enregistré.
+ReceiptCheckMatchSkipped = Recalcul non effectué : un des contrôles précédents a échoué.
+ReceiptCheckReadable = Partie lisible du reçu
+ReceiptCheckReadableOk = La partie lisible du reçu (ballot_decoded) dit exactement ce que dit le vote vérifié.
+ReceiptCheckReadableKo = La partie lisible du reçu (ballot_decoded) ne correspond pas au vote vérifié : le reçu a été modifié. Seul le vote vérifié, affiché ci-dessous, fait foi.
+ReceiptProvenBallotTitle = Vote n°%s réellement enregistré (vérifié par recalcul du chiffré)
+ReceiptVerdictMatch = Le vote n°%s enregistré dans ce fichier est exactement celui décrit par ce reçu.
+ReceiptVerdictMismatch = Ce reçu ne correspond pas au fichier des votes déposé : il ne prouve rien sur le contenu du vote enregistré. Cela ne met en cause ni le reçu ni le fichier pris isolément.
+ReceiptHowToVerify1 = Ce reçu ne prouve rien seul : il doit être vérifié contre un fichier des votes de cette campagne.
+ReceiptHowToVerify2 = Recalculez : chiffré = sealBallot(sodium_pad(ballot, ballot_size de la genèse du fichier), clé publique de la genèse, ephemeral_key de ce reçu).
+ReceiptHowToVerify3 = Comparez le résultat, octet pour octet, au chiffré du vote portant ce même numéro (seq) dans le fichier des votes.
+ReceiptHowToVerify4 = Une correspondance exacte, contre un fichier des votes authentique, prouve le contenu du vote : un chiffré ne se déchiffre qu'en un seul contenu. Un écart, lui, ne prouve rien : vérifiez votre reçu pendant le vote et signalez tout écart avant la clôture.
+ReceiptCheckedAgainstOfficialChain = Vérification faite par l'instance de la campagne, contre sa chaîne officielle. Pour une preuve indépendante du serveur, refaites-la dans le Déchiffrement externe (menu Votes) d'une autre instance.
+DecryptTabVoteFileHelp = Facultatif si vous déposez un reçu de vote ci-dessous : celui-ci est alors vérifié contre la chaîne officielle de cette campagne.
+ErrorVoteFileOrReceiptMissing = Déposez un fichier des votes, un reçu de vote, ou les deux.
 
 #
 # Reveal, count and sales reps (lot 3)
@@ -219,6 +265,7 @@ ManualDecryptionStep1 = Téléchargez le script (ou copiez-le dans un fichier de
 ManualDecryptionStep2 = Relevez la clé privée révélée dans l'onglet Résultats de la campagne.
 ManualDecryptionStep3 = Dans un terminal, lancez : php dechiffrer-votes.php FICHIER.json CLÉ_PRIVÉE
 ManualDecryptionStep4 = Le script vérifie la genèse puis chaque maillon de la chaîne, et affiche chaque vote en clair : votant, date et points par tiers. Un maillon « ALTÉRÉE » prouve que le fichier a été modifié.
+ManualDecryptionStep5 = Pour vérifier un reçu de vote, sans aucune clé de campagne : php dechiffrer-votes.php FICHIER.json --recu RECU.json (la clé privée reste facultative et peut être ajoutée avant ou omise).
 ManualDecryptionDownload = Télécharger le script
 
 #
@@ -285,3 +332,4 @@ ErrorCampaignOnlyCreatorCanAttribute = Seul le responsable de la campagne peut a
 ErrorCampaignAlreadyAttributed = Les commerciaux de cette campagne ont déjà été attribués.
 ErrorVoteFileInvalid = Fichier des votes illisible (%s).
 ErrorVoteFileMissing = Aucun fichier des votes valide n'a été déposé (5 Mo au plus).
+ErrorReceiptInvalid = Reçu illisible (%s).

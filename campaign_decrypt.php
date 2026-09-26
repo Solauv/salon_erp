@@ -114,19 +114,34 @@ if ($object->id <= 0 || (int) $object->status === Campaign::STATUS_DRAFT) {
  */
 
 $report = null;
+$receiptOnlyReport = null;
 $reshook = $hookmanager->executeHooks('doActions', array(), $object, $action);
 if ($reshook < 0) {
 	setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
 }
 if (empty($reshook) && $action == 'analyse' && $_SERVER['REQUEST_METHOD'] === 'POST' && salonerpCheckPostToken()) {
 	$content = salonerpReadUploadedVoteFile();
-	if ($content === false) {
-		setEventMessages($langs->trans('ErrorVoteFileMissing'), null, 'errors');
-	} else {
+	// The receipt is optional and, unlike the vote file, is not read as a
+	// strict requirement here: dropping one alone is enough on this tab,
+	// since it is then checked against the campaign's OWN official chain
+	// (built server-side below), not against a file the reader had to
+	// obtain and trust first.
+	$receiptContent = salonerpReadUploadedReceiptFile();
+
+	if ($content === false && $receiptContent === '') {
+		setEventMessages($langs->trans('ErrorVoteFileOrReceiptMissing'), null, 'errors');
+	} elseif ($content !== false) {
 		$official = $object->fetchVotes();
 		// Decryption only once revealed: before, no key is stored.
 		$key = ((int) $object->status === Campaign::STATUS_REVEALED) ? (string) $object->private_key : '';
-		$report = SalonerpVoteFile::analyse($content, $key, array('ref' => (string) $object->ref, 'genesis_hash' => (string) $object->genesis_hash), is_array($official) ? $official : array());
+		$report = SalonerpVoteFile::analyse($content, $key, array('ref' => (string) $object->ref, 'genesis_hash' => (string) $object->genesis_hash), is_array($official) ? $official : array(), $receiptContent);
+	} else {
+		// No vote file dropped: the receipt alone, checked against this very
+		// instance's own official chain (Campaign::checkReceiptAgainstOfficialChain()).
+		$receiptOnlyReport = $object->checkReceiptAgainstOfficialChain($receiptContent);
+		if ($receiptOnlyReport === null) {
+			setEventMessages($object->error, null, 'errors');
+		}
 	}
 }
 
@@ -156,13 +171,18 @@ print '<form method="POST" enctype="multipart/form-data" action="'.$_SERVER['PHP
 print '<input type="hidden" name="token" value="'.newToken().'">';
 print '<input type="hidden" name="action" value="analyse">';
 print '<input type="hidden" name="id" value="'.$object->id.'">';
-print '<input type="file" name="votefile" accept=".json,application/json"> ';
-print '<input type="submit" class="button smallpaddingimp" value="'.dol_escape_htmltag($langs->trans($revealed ? 'VoteFileCheckAndDecrypt' : 'VoteFileCheck')).'">';
+print '<table class="border centpercent tableforfield">';
+print '<tr><td class="titlefield">'.$langs->trans('VoteFile').'</td><td><input type="file" name="votefile" accept=".json,application/json"><br><span class="opacitymedium">'.$langs->trans('DecryptTabVoteFileHelp').'</span></td></tr>';
+print '<tr><td>'.$langs->trans('ReceiptFile').'</td><td><input type="file" name="receiptfile" accept=".json,application/json"><br><span class="opacitymedium">'.$langs->trans('ReceiptFileHelp').'</span></td></tr>';
+print '</table>';
+print '<div class="center"><input type="submit" class="button smallpaddingimp" value="'.dol_escape_htmltag($langs->trans($revealed ? 'VoteFileCheckAndDecrypt' : 'VoteFileCheck')).'"></div>';
 print '</form>';
-print '<p class="opacitymedium">'.$langs->trans('VoteFileNotStored').'</p>';
+print '<p class="opacitymedium">'.$langs->trans('VoteFileNotStored').' '.$langs->trans('ReceiptNotStored').'</p>';
 
 if (is_array($report)) {
 	salonerpPrintVoteFileReport($report);
+} elseif (is_array($receiptOnlyReport)) {
+	salonerpPrintReceiptCheck($receiptOnlyReport, true);
 }
 
 print '</div>';

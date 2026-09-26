@@ -120,6 +120,13 @@ $isCreator = ((int) $user->id === (int) $object->fk_user_creat);
 // the session, checked again server-side when the vote is posted.
 $sessionKey = 'salonerp_votefile_'.((int) $object->id);
 
+// This is only ever filled on a successful castVote() in THIS request: never
+// stored in session, never logged, never persisted. Once the response is
+// sent, the receipt (and the eph_sk it carries) only ever exists in the
+// voter's browser.
+$receiptToShowOnce = '';
+$receiptSeqToShowOnce = 0;
+
 
 /*
  * Actions
@@ -164,13 +171,19 @@ if (empty($reshook)) {
 					$allocations[(int) $socId] = $points;
 				}
 			}
-			$result = $object->castVote($user, $allocations, (string) GETPOST('privatekey', 'alphanohtml'));
+			$receipt = null;
+			$result = $object->castVote($user, $allocations, (string) GETPOST('privatekey', 'alphanohtml'), $receipt);
 			if ($result > 0) {
 				setEventMessages($langs->trans('CampaignVoteRecorded'), null, 'mesgs');
-				header('Location: '.dol_buildpath('/salonerp/campaign_vote.php', 1).'?id='.$object->id);
-				exit;
+				// No redirect here, on purpose: the receipt is shown exactly
+				// once, in this very response, exactly like the campaign's
+				// private key after validate() on campaign_card.php. A
+				// redirect (or a page reload) would lose it forever.
+				$receiptToShowOnce = (string) $receipt;
+				$receiptSeqToShowOnce = $result;
+			} else {
+				setEventMessages(null, $object->errors, 'errors');
 			}
-			setEventMessages(null, $object->errors, 'errors');
 		}
 	}
 }
@@ -182,6 +195,14 @@ if (empty($reshook)) {
 
 $form = new Form($db);
 
+// The receipt must never be cached anywhere (browser disk cache, proxy,
+// history replay): send the headers before any output, including
+// llxHeader(), exactly like campaign_card.php does for the private key.
+if (!empty($receiptToShowOnce)) {
+	header('Cache-Control: no-cache, no-store, must-revalidate, max-age=0');
+	header('Pragma: no-cache');
+}
+
 $title = $langs->trans('Campaign').' - '.$langs->trans('CampaignVoteTab');
 llxHeader('', $title, '');
 
@@ -190,6 +211,78 @@ print dol_get_fiche_head($head, 'vote', $langs->trans("Campaign"), -1, $object->
 
 $linkback = '<a href="'.dol_buildpath('/salonerp/campaign_list.php', 1).'?restore_lastsearch_values=1">'.$langs->trans("BackToList").'</a>';
 dol_banner_tab($object, 'ref', $linkback, 1, 'ref', 'ref', '');
+
+// Receipt, shown once, right after a successful vote. Never written to a
+// log, a session or a file: it only ever exists in this HTML response and in
+// the voter's browser memory/download, exactly like the private key on
+// campaign_card.php.
+if (!empty($receiptToShowOnce)) {
+	$receiptFilename = 'recu-'.dol_sanitizeFileName((string) $object->ref).'-'.$receiptSeqToShowOnce.'.json';
+
+	print '<div class="warning border centpercent" style="padding: 10px; margin-bottom: 15px;">';
+	print '<p><strong>'.$langs->trans('ReceiptWarningTitle').'</strong></p>';
+	print '<p>'.$langs->trans('ReceiptWarningText').'</p>';
+	print '<pre id="salonerp-receipt" class="wordbreak" style="max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #fff; padding: 5px;">'.dol_escape_htmltag($receiptToShowOnce, 0, 1).'</pre>';
+	print '<textarea id="salonerp-receipt-input" readonly style="position: absolute; left: -9999px;">'.dol_escape_htmltag($receiptToShowOnce, 0, 1).'</textarea>';
+	print '<button type="button" id="salonerp-copy-receipt" class="button smallpaddingimp">'.$langs->trans('CopyReceipt').'</button> ';
+	print '<button type="button" id="salonerp-download-receipt" class="button smallpaddingimp">'.$langs->trans('DownloadReceipt').'</button>';
+	print '</div>';
+	// $keepn = 1 above: by default dol_escape_htmltag() turns newlines into a
+	// literal \n, and the copied or downloaded receipt would no longer be JSON.
+	// The receipt JSON and the filename are encoded with the JSON_HEX_*
+	// flags: the resulting literals are safe to embed directly inside a
+	// <script> block (same pattern as campaign_card.php's private key).
+	print '<script nonce="'.getNonce().'">
+	document.addEventListener("DOMContentLoaded", function () {
+		var node = document.getElementById("salonerp-receipt");
+		var input = document.getElementById("salonerp-receipt-input");
+		var copyBtn = document.getElementById("salonerp-copy-receipt");
+		var dlBtn = document.getElementById("salonerp-download-receipt");
+		if (copyBtn) {
+			var copyLabel = copyBtn.textContent;
+			var copyDone = function () {
+				copyBtn.textContent = '.json_encode($langs->transnoentitiesnoconv('CopyReceiptDone'), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT).';
+				setTimeout(function () { copyBtn.textContent = copyLabel; }, 3000);
+			};
+			copyBtn.addEventListener("click", function () {
+				if (navigator.clipboard && navigator.clipboard.writeText) {
+					navigator.clipboard.writeText(node.textContent).then(copyDone);
+				} else {
+					input.style.position = "static";
+					input.select();
+					input.setSelectionRange(0, 99999999);
+					try {
+						if (document.execCommand("copy")) {
+							copyDone();
+						}
+					} finally {
+						input.style.position = "absolute";
+					}
+				}
+			});
+		}
+		var downloadReceipt = function () {
+			var blob = new Blob([node.textContent], {type: "application/json"});
+			var url = URL.createObjectURL(blob);
+			var a = document.createElement("a");
+			a.href = url;
+			a.download = '.json_encode($receiptFilename, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT).';
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+		};
+		if (dlBtn) {
+			dlBtn.addEventListener("click", downloadReceipt);
+		}
+		// Automatic download, same function as the button above: the one and
+		// only chance to grab this receipt without recasting the vote. If the
+		// browser blocks it (some do, for an unsolicited download), the
+		// button remains the fallback: see ReceiptWarningText.
+		downloadReceipt();
+	});
+	</script>';
+}
 
 print '<div class="fichecenter">';
 print '<div class="underbanner clearboth"></div>';
@@ -365,3 +458,10 @@ print dol_get_fiche_end();
 // End of page
 llxFooter();
 $db->close();
+
+// The receipt only ever lived in this response's output buffer (already
+// flushed by llxFooter()/the page lifecycle) and in this local variable:
+// wipe it from process memory now that it has been displayed.
+if (!empty($receiptToShowOnce)) {
+	sodium_memzero($receiptToShowOnce);
+}

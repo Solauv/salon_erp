@@ -993,6 +993,53 @@ class Campaign extends CommonObject
 	}
 
 	/**
+	 * The public meaning of a decoded ballot (its 'fk_user' and 'points' pairs
+	 * resolved to names), for display only: never part of anything hashed or
+	 * compared. Reused by buildReceipt() (the voter's own ballot, right after
+	 * casting it) and by SalonerpVoteFile's receipt check (a reader verifying
+	 * someone else's receipt against a vote file, from that file's own genesis).
+	 *
+	 * @param	array{fk_user?:int,date?:string,points?:array<int,array{0:int,1:int}>}	$ballot		Decoded ballot plaintext (json_decode of buildBallotPlaintext())
+	 * @param	?array{voters?:array<int,mixed>,thirdparties?:array<int,mixed>}		$genesis	Decoded genesis payload names are read from, or null
+	 * @return	array{date:string,fk_user:int,voter:string,thirdparties:array<int,array{id:int,name:string,points:int}>}
+	 */
+	public static function describeBallot(array $ballot, ?array $genesis): array
+	{
+		$thirdpartyNames = array();
+		$voterNames = array();
+		if (is_array($genesis)) {
+			foreach ((isset($genesis['thirdparties']) && is_array($genesis['thirdparties'])) ? $genesis['thirdparties'] : array() as $t) {
+				if (is_array($t) && isset($t['id'])) {
+					$thirdpartyNames[(int) $t['id']] = isset($t['name']) ? (string) $t['name'] : '';
+				}
+			}
+			foreach ((isset($genesis['voters']) && is_array($genesis['voters'])) ? $genesis['voters'] : array() as $v) {
+				if (is_array($v) && isset($v['id'])) {
+					$voterNames[(int) $v['id']] = isset($v['name']) ? (string) $v['name'] : '';
+				}
+			}
+		}
+
+		$fkUser = isset($ballot['fk_user']) ? (int) $ballot['fk_user'] : 0;
+		$result = array(
+			'date' => isset($ballot['date']) ? (string) $ballot['date'] : '',
+			'fk_user' => $fkUser,
+			'voter' => (isset($voterNames[$fkUser]) && $voterNames[$fkUser] !== '') ? $voterNames[$fkUser] : ('#'.$fkUser),
+			'thirdparties' => array(),
+		);
+		foreach ((isset($ballot['points']) && is_array($ballot['points'])) ? $ballot['points'] : array() as $pair) {
+			$socId = (int) $pair[0];
+			$result['thirdparties'][] = array(
+				'id' => $socId,
+				'name' => (isset($thirdpartyNames[$socId]) && $thirdpartyNames[$socId] !== '') ? $thirdpartyNames[$socId] : ('#'.$socId),
+				'points' => (int) $pair[1],
+			);
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Worst-case size, in bytes, of this campaign's ballot plaintext: a true
 	 * majorant, computed once at validation and frozen into the genesis
 	 * ('ballot_size'). It assumes, all at once:
@@ -1509,6 +1556,99 @@ class Campaign extends CommonObject
 	}
 
 	/**
+	 * Explicit, from-scratch construction of a libsodium "sealed box": exactly
+	 * what sodium_crypto_box_seal($padded, $publicKey) computes internally,
+	 * except that function generates its own ephemeral keypair and throws the
+	 * secret half away, while this one takes it as a parameter so the caller
+	 * can keep it. Pure and reusable: castVote() calls it to seal a real vote
+	 * (a fresh eph_sk every time, see there), and SalonerpVoteFile checks a
+	 * voter's receipt by calling it again with the eph_sk out of that receipt
+	 * and comparing the result, byte for byte, to the ciphertext recorded in
+	 * the chain at the receipt's seq.
+	 *
+	 * ciphertext = eph_pk || crypto_box(padded, nonce, eph_sk, publicKey)
+	 * nonce      = BLAKE2b(eph_pk . publicKey, SODIUM_CRYPTO_BOX_NONCEBYTES)
+	 *
+	 * This is bit-for-bit what sodium_crypto_box_seal() would have produced
+	 * with this eph_sk, and the result is openable by
+	 * sodium_crypto_box_seal_open() unchanged: a sealed box only ever opens to
+	 * the one plaintext it was built from, so nobody, not even the voter who
+	 * holds eph_sk, can later forge a receipt matching a different ballot.
+	 *
+	 * @param	string	$padded				Padded plaintext to seal (sodium_pad() output)
+	 * @param	string	$publicKey			Recipient's raw X25519 public key (32 bytes)
+	 * @param	string	$ephemeralSecret	Raw X25519 secret key of a fresh, one-time keypair (32 bytes)
+	 * @return	string						Raw sealed box: eph_pk (32 bytes) followed by the box (len($padded) + SODIUM_CRYPTO_BOX_SEALBYTES - 32 bytes)
+	 */
+	public static function sealBallot(string $padded, string $publicKey, string $ephemeralSecret): string
+	{
+		$ephemeralPublic = sodium_crypto_box_publickey_from_secretkey($ephemeralSecret);
+		$nonce = sodium_crypto_generichash($ephemeralPublic.$publicKey, '', SODIUM_CRYPTO_BOX_NONCEBYTES);
+		$keypair = sodium_crypto_box_keypair_from_secretkey_and_publickey($ephemeralSecret, $publicKey);
+
+		$box = sodium_crypto_box($padded, $nonce, $keypair);
+
+		sodium_memzero($keypair);
+		sodium_memzero($nonce);
+
+		return $ephemeralPublic.$box;
+	}
+
+	/**
+	 * Build a voter's receipt right after their vote was sealed: the one and
+	 * only proof they can hold of its exact content, since the campaign never
+	 * stores eph_sk anywhere (see castVote()). Format 'salonerp-receipt/1'.
+	 * Pure: everything it needs is passed in, nothing is read from the
+	 * database.
+	 *
+	 * Anyone holding this receipt and a vote file of the campaign can, without
+	 * any campaign key, pad 'ballot' to the file's genesis ballot_size, reseal
+	 * it with sealBallot() and 'ephemeral_key', and compare the result to the
+	 * ciphertext of vote #seq in the file: see SalonerpVoteFile's receipt
+	 * check. A sealed box opens to a single plaintext, so a match is
+	 * conclusive proof of what was cast, and nothing else can ever be made to
+	 * match it.
+	 *
+	 * @param	string	$ref				Campaign ref
+	 * @param	string	$genesisPayload		Campaign's stored genesis payload (used only to name voters/thirdparties for 'ballot_decoded')
+	 * @param	string	$genesisHash		Campaign's stored genesis hash
+	 * @param	int		$seq				Rank of the vote in the chain
+	 * @param	string	$hash				Chain hash of the vote (Campaign::computeVoteHash())
+	 * @param	string	$ballotPlaintext	Exact, unpadded JSON of the ballot (Campaign::buildBallotPlaintext())
+	 * @param	string	$ephemeralSecret	Raw X25519 secret key of the fresh, one-time keypair used to seal this vote (32 bytes)
+	 * @return	string						Pretty-printed JSON receipt
+	 */
+	public static function buildReceipt(string $ref, string $genesisPayload, string $genesisHash, int $seq, string $hash, string $ballotPlaintext, string $ephemeralSecret): string
+	{
+		global $langs;
+
+		$langs->load('salonerp@salonerp');
+
+		$genesis = json_decode($genesisPayload, true);
+		$ballotArray = json_decode($ballotPlaintext, true);
+		$decoded = is_array($ballotArray) ? self::describeBallot($ballotArray, is_array($genesis) ? $genesis : null) : array();
+
+		$receipt = array(
+			'format' => 'salonerp-receipt/1',
+			'campaign' => $ref,
+			'genesis_hash' => $genesisHash,
+			'seq' => $seq,
+			'hash' => $hash,
+			'ballot' => $ballotPlaintext,
+			'ephemeral_key' => base64_encode($ephemeralSecret),
+			'how_to_verify' => array(
+				$langs->transnoentitiesnoconv('ReceiptHowToVerify1'),
+				$langs->transnoentitiesnoconv('ReceiptHowToVerify2'),
+				$langs->transnoentitiesnoconv('ReceiptHowToVerify3'),
+				$langs->transnoentitiesnoconv('ReceiptHowToVerify4'),
+			),
+			'ballot_decoded' => $decoded,
+		);
+
+		return json_encode($receipt, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+	}
+
+	/**
 	 * Cast a vote: seal it with the campaign public key and append it to the
 	 * chain. Runs under the campaign lock (see lockAndFetchStatus()), so the
 	 * checks below and the append are atomic, and two votes can never compete
@@ -1525,12 +1665,23 @@ class Campaign extends CommonObject
 	 *
 	 * The first valid vote (the creator's) opens the campaign to the others.
 	 *
+	 * On success, $receiptOut is filled with the voter's receipt
+	 * (Campaign::buildReceipt()): their sole proof of this vote's exact
+	 * content, since the ephemeral secret key used to seal it (eph_sk) is
+	 * generated fresh here and NEVER persisted anywhere (no column carries
+	 * it, no session, no log, no file) — exactly like validate() with the
+	 * campaign's private key, it exists only in this call's locals and in
+	 * $receiptOut, until the caller shows it to the voter once and it is
+	 * wiped. $receiptOut is left untouched (whatever the caller passed) on
+	 * every refused path.
+	 *
 	 * @param	User				$user			Voting user
 	 * @param	array<int|string,int|string>	$allocations	Points by thirdparty id
 	 * @param	string				$privateKeyB64	Creator's private key, required for the first vote only
+	 * @param	?string				$receiptOut		Out: JSON receipt on success (Campaign::buildReceipt()), untouched on failure
 	 * @return	int								Rank of the vote in the chain (>0), or -1 if KO
 	 */
-	public function castVote(User $user, array $allocations, string $privateKeyB64 = '')
+	public function castVote(User $user, array $allocations, string $privateKeyB64 = '', ?string &$receiptOut = null)
 	{
 		global $langs;
 
@@ -1658,10 +1809,22 @@ class Campaign extends CommonObject
 		// is < $ballotSize, the result is always exactly $ballotSize bytes,
 		// whatever the ballot. That is what hides its shape in the ciphertext.
 		$padded = sodium_pad($plaintext, $ballotSize);
-		sodium_memzero($plaintext);
-		$publicKey = base64_decode((string) $this->public_key, true);
-		$ciphertext = base64_encode(sodium_crypto_box_seal($padded, (string) $publicKey));
+		$publicKey = (string) base64_decode((string) $this->public_key, true);
+
+		// A fresh, one-time keypair for this vote alone. Its secret half
+		// (eph_sk) is what lets sealBallot() be reconstructed and checked
+		// later against a receipt (see SalonerpVoteFile): it is NEVER
+		// persisted (no column of salonerp_campaign_vote carries it, no
+		// session, no log, no file), only ever kept in the locals of this
+		// call, until it is handed once to the voter below and wiped.
+		$ephKeypair = sodium_crypto_box_keypair();
+		$ephemeralSecret = sodium_crypto_box_secretkey($ephKeypair);
+		sodium_memzero($ephKeypair);
+
+		$ciphertextRaw = self::sealBallot($padded, $publicKey, $ephemeralSecret);
 		sodium_memzero($padded);
+		$ciphertext = base64_encode($ciphertextRaw);
+		sodium_memzero($ciphertextRaw);
 		$hash = self::computeVoteHash($seq, $prevHash, $ciphertext);
 
 		$sql = "INSERT INTO ".$this->db->prefix()."salonerp_campaign_vote";
@@ -1671,6 +1834,8 @@ class Campaign extends CommonObject
 		$sql .= ", '".$this->db->idate($now)."')";
 		if (!$this->db->query($sql)) {
 			$this->errors[] = $this->db->lasterror();
+			sodium_memzero($plaintext);
+			sodium_memzero($ephemeralSecret);
 			$this->db->rollback();
 			return -1;
 		}
@@ -1681,6 +1846,8 @@ class Campaign extends CommonObject
 			$sql .= " WHERE rowid = ".((int) $this->id)." AND status = ".self::STATUS_VALIDATED;
 			if (!$this->db->query($sql)) {
 				$this->errors[] = $this->db->lasterror();
+				sodium_memzero($plaintext);
+				sodium_memzero($ephemeralSecret);
 				$this->db->rollback();
 				return -1;
 			}
@@ -1689,7 +1856,49 @@ class Campaign extends CommonObject
 
 		$this->db->commit();
 
+		// Built and filled in only on this successful path, exactly once:
+		// like validate()'s private key, the receipt (and the eph_sk it
+		// carries) only ever exists in this response and the voter's browser
+		// from here on. Never re-derivable afterwards: nothing above kept it.
+		$receiptOut = self::buildReceipt((string) $this->ref, (string) $this->genesis_payload, (string) $this->genesis_hash, $seq, $hash, $plaintext, $ephemeralSecret);
+
+		sodium_memzero($plaintext);
+		sodium_memzero($ephemeralSecret);
+
 		return $seq;
+	}
+
+	/**
+	 * Check a voter's receipt against THIS campaign's own official chain: the
+	 * vote file is built here, server-side (buildVoteFile()), instead of
+	 * being supplied by the caller. This is what lets "Contester un vote"
+	 * (the Decrypt tab) verify a receipt on its own, with nothing but the
+	 * receipt itself — no vote file to hunt for or trust beforehand.
+	 *
+	 * The reference here is this Dolibarr instance: a match only proves the
+	 * receipt agrees with what THIS server currently serves as its official
+	 * chain. For a check that does not have to trust this server at all,
+	 * the receipt must instead be checked against an independently-obtained
+	 * vote file, e.g. on the External decryption page of another instance
+	 * (see SalonerpVoteFile::analyse() directly).
+	 *
+	 * @param	string	$receiptJson	Receipt content to check (Campaign::buildReceipt())
+	 * @return	?array<string,mixed>	SalonerpVoteFile::analyse()'s 'receipt' entry, or null if the official file itself could not be built (fetchVotes() SQL error)
+	 */
+	public function checkReceiptAgainstOfficialChain(string $receiptJson): ?array
+	{
+		dol_include_once('/salonerp/class/salonerpvotefile.class.php');
+
+		$officialFile = $this->buildVoteFile();
+		if (!is_string($officialFile)) {
+			return null;
+		}
+		$official = $this->fetchVotes();
+		$expected = array('ref' => (string) $this->ref, 'genesis_hash' => (string) $this->genesis_hash);
+
+		$report = SalonerpVoteFile::analyse($officialFile, '', $expected, is_array($official) ? $official : array(), $receiptJson);
+
+		return $report['receipt'];
 	}
 
 	/**

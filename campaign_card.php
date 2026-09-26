@@ -500,19 +500,25 @@ if ($action == 'create') {
 					}
 				});
 			}
+			var downloadKey = function () {
+				var blob = new Blob([keyNode.textContent], {type: "text/plain"});
+				var url = URL.createObjectURL(blob);
+				var a = document.createElement("a");
+				a.href = url;
+				a.download = '.json_encode((string) $object->ref, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT).' + ".key";
+				document.body.appendChild(a);
+				a.click();
+				document.body.removeChild(a);
+				setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+			};
 			if (dlBtn) {
-				dlBtn.addEventListener("click", function () {
-					var blob = new Blob([keyNode.textContent], {type: "text/plain"});
-					var url = URL.createObjectURL(blob);
-					var a = document.createElement("a");
-					a.href = url;
-					a.download = '.json_encode((string) $object->ref, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT).' + ".key";
-					document.body.appendChild(a);
-					a.click();
-					document.body.removeChild(a);
-					URL.revokeObjectURL(url);
-				});
+				dlBtn.addEventListener("click", downloadKey);
 			}
+			// Automatic download, same function as the button above: the one
+			// and only chance to grab this key without retyping it. If the
+			// browser blocks it (some do, for an unsolicited download), the
+			// button remains the fallback: see PrivateKeyWarningText.
+			downloadKey();
 		});
 		</script>';
 	}
