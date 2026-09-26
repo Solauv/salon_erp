@@ -191,6 +191,12 @@ if (empty($reshook)) {
 		if (!$error) {
 			$result = $object->create($user);
 			if ($result > 0) {
+				// The draft is created even if the automatic synchronisation of
+				// voters or thirdparties failed: report it, the "Synchroniser"
+				// buttons on the draft let the user retry by hand.
+				if (!empty($object->errors)) {
+					setEventMessages(null, $object->errors, 'errors');
+				}
 				header('Location: '.dol_buildpath('/salonerp/campaign_card.php', 1).'?id='.$result);
 				exit;
 			} else {
@@ -224,6 +230,12 @@ if (empty($reshook)) {
 		} else {
 			$result = $object->update($user);
 			if ($result > 0) {
+				// The draft is modified even if the automatic resynchronisation
+				// triggered by a group/tag change failed: report it, the
+				// "Synchroniser" buttons on the draft let the user retry by hand.
+				if (!empty($object->errors)) {
+					setEventMessages(null, $object->errors, 'errors');
+				}
 				header('Location: '.dol_buildpath('/salonerp/campaign_card.php', 1).'?id='.$object->id);
 				exit;
 			} else {
@@ -353,7 +365,7 @@ if ($action == 'create') {
 	print '</td></tr>';
 
 	print '<tr><td>'.$langs->trans('Description').'</td><td>';
-	print '<textarea name="description" class="quatrevingtpercent" rows="3">'.dol_escape_htmltag(GETPOST('description', 'restricthtml')).'</textarea>';
+	print '<textarea name="description" class="quatrevingtpercent" rows="3">'.dol_escape_htmltag(GETPOST('description', 'restricthtml'), 0, 1).'</textarea>';
 	print '</td></tr>';
 
 	print '<tr><td class="fieldrequired">'.$langs->trans('DateStart').'</td><td>';
@@ -403,7 +415,7 @@ if ($action == 'create') {
 	print '</td></tr>';
 
 	print '<tr><td>'.$langs->trans('Description').'</td><td>';
-	print '<textarea name="description" class="quatrevingtpercent" rows="3">'.dol_escape_htmltag((string) $object->description).'</textarea>';
+	print '<textarea name="description" class="quatrevingtpercent" rows="3">'.dol_escape_htmltag((string) $object->description, 0, 1).'</textarea>';
 	print '</td></tr>';
 
 	print '<tr><td class="fieldrequired">'.$langs->trans('DateStart').'</td><td>';
@@ -500,19 +512,25 @@ if ($action == 'create') {
 					}
 				});
 			}
+			var downloadKey = function () {
+				var blob = new Blob([keyNode.textContent], {type: "text/plain"});
+				var url = URL.createObjectURL(blob);
+				var a = document.createElement("a");
+				a.href = url;
+				a.download = '.json_encode((string) $object->ref, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT).' + ".key";
+				document.body.appendChild(a);
+				a.click();
+				document.body.removeChild(a);
+				setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+			};
 			if (dlBtn) {
-				dlBtn.addEventListener("click", function () {
-					var blob = new Blob([keyNode.textContent], {type: "text/plain"});
-					var url = URL.createObjectURL(blob);
-					var a = document.createElement("a");
-					a.href = url;
-					a.download = '.json_encode((string) $object->ref, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT).' + ".key";
-					document.body.appendChild(a);
-					a.click();
-					document.body.removeChild(a);
-					URL.revokeObjectURL(url);
-				});
+				dlBtn.addEventListener("click", downloadKey);
 			}
+			// Automatic download, same function as the button above: the one
+			// and only chance to grab this key without retyping it. If the
+			// browser blocks it (some do, for an unsolicited download), the
+			// button remains the fallback: see PrivateKeyWarningText.
+			downloadKey();
 		});
 		</script>';
 	}

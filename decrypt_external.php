@@ -106,7 +106,10 @@ if ($action == 'analyse' && $_SERVER['REQUEST_METHOD'] === 'POST' && salonerpChe
 		setEventMessages($langs->trans('ErrorVoteFileMissing'), null, 'errors');
 	} else {
 		// No campaign here: only what the file itself proves, plus the key.
-		$report = SalonerpVoteFile::analyse($content, trim((string) GETPOST('privatekey', 'alphanohtml')));
+		// The receipt is optional, and checked against the file whatever the
+		// key: it needs none, and works while the vote is still open.
+		$receiptContent = salonerpReadUploadedReceiptFile();
+		$report = SalonerpVoteFile::analyse($content, trim((string) GETPOST('privatekey', 'alphanohtml')), null, null, $receiptContent);
 	}
 }
 
@@ -127,11 +130,12 @@ print '<input type="hidden" name="token" value="'.newToken().'">';
 print '<input type="hidden" name="action" value="analyse">';
 print '<table class="border centpercent tableforfield">';
 print '<tr><td class="titlefield fieldrequired">'.$langs->trans('VoteFile').'</td><td><input type="file" name="votefile" accept=".json,application/json"></td></tr>';
+print '<tr><td>'.$langs->trans('ReceiptFile').'</td><td><input type="file" name="receiptfile" accept=".json,application/json"><br><span class="opacitymedium">'.$langs->trans('ReceiptFileHelp').'</span></td></tr>';
 print '<tr><td>'.$langs->trans('RevealedPrivateKey').'</td><td><input type="text" name="privatekey" class="centpercent" autocomplete="off" value="'.dol_escape_htmltag(trim((string) GETPOST('privatekey', 'alphanohtml'))).'"><br><span class="opacitymedium">'.$langs->trans('RevealedPrivateKeyHelp').'</span></td></tr>';
 print '</table>';
 print '<div class="center"><input type="submit" class="button" value="'.dol_escape_htmltag($langs->trans('VoteFileCheckAndDecrypt')).'"></div>';
 print '</form>';
-print '<p class="opacitymedium">'.$langs->trans('VoteFileNotStored').'</p>';
+print '<p class="opacitymedium">'.$langs->trans('VoteFileNotStored').' '.$langs->trans('ReceiptNotStored').'</p>';
 
 if (is_array($report)) {
 	salonerpPrintVoteFileReport($report);
@@ -141,7 +145,7 @@ if (is_array($report)) {
 print load_fiche_titre($langs->trans('ManualDecryptionTitle'), '', '');
 print '<p>'.$langs->trans('ManualDecryptionText').'</p>';
 print '<ol>';
-foreach (array('ManualDecryptionStep1', 'ManualDecryptionStep2', 'ManualDecryptionStep3', 'ManualDecryptionStep4') as $step) {
+foreach (array('ManualDecryptionStep1', 'ManualDecryptionStep2', 'ManualDecryptionStep3', 'ManualDecryptionStep4', 'ManualDecryptionStep5') as $step) {
 	print '<li>'.$langs->trans($step).'</li>';
 }
 print '</ol>';

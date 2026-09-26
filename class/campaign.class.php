@@ -226,7 +226,14 @@ class Campaign extends CommonObject
 	}
 
 	/**
-	 * Create object into database
+	 * Create object into database, then run the same two synchronisations the
+	 * "Synchroniser" buttons trigger by hand (syncVotersFromGroup(),
+	 * syncThirdpartiesFromCategory()): the draft shows its voters and
+	 * thirdparties immediately, with no click needed. Each sync opens its own
+	 * transaction, after createCommon()'s has already committed: a sync
+	 * failure never undoes the draft that was just created. On failure,
+	 * ->errors carries translated messages for the caller to display; the
+	 * buttons stay available on the draft to retry by hand.
 	 *
 	 * @param	User		$user		User that creates
 	 * @param	int<0,1> 	$notrigger	0=launch triggers after, 1=disable triggers
@@ -234,7 +241,7 @@ class Campaign extends CommonObject
 	 */
 	public function create(User $user, $notrigger = 0)
 	{
-		global $conf;
+		global $conf, $langs;
 
 		if (empty($this->tie_rule)) {
 			$this->tie_rule = self::TIE_RULE_DEFAULT;
@@ -248,7 +255,24 @@ class Campaign extends CommonObject
 			$this->entity = (int) $conf->entity;
 		}
 
-		return $this->createCommon($user, $notrigger);
+		$result = $this->createCommon($user, $notrigger);
+		if ($result <= 0) {
+			return $result;
+		}
+
+		$langs->load('salonerp@salonerp');
+		$this->errors = array();
+		// No group/category chosen (should not happen, both are mandatory
+		// fields, but the page must never be trusted blindly): simply skip
+		// the corresponding sync, no error.
+		if (!empty($this->fk_usergroup) && $this->syncVotersFromGroup($user) <= 0) {
+			$this->errors[] = $langs->trans($this->error);
+		}
+		if (!empty($this->fk_category) && $this->syncThirdpartiesFromCategory($user) <= 0) {
+			$this->errors[] = $langs->trans($this->error);
+		}
+
+		return $result;
 	}
 
 	/**
@@ -379,9 +403,18 @@ class Campaign extends CommonObject
 	/**
 	 * Update object into database. Refused once the campaign is no longer a draft:
 	 * nothing (fields, voters, points, thirdparties) can change after validate().
-	 * Changing the tag empties the thirdparty list. The status is
-	 * reread from the database: an in-memory ->status = STATUS_DRAFT on a
-	 * validated object must not grant anything.
+	 * The status is reread from the database: an in-memory ->status =
+	 * STATUS_DRAFT on a validated object must not grant anything.
+	 *
+	 * If the tag or the group changed, the corresponding list is
+	 * resynchronised automatically (syncThirdpartiesFromCategory() /
+	 * syncVotersFromGroup(), the same the "Synchroniser" buttons call by
+	 * hand), once the field update itself is safely committed: a sync
+	 * failure never undoes the fields that were just saved. On failure,
+	 * ->errors carries translated messages for the caller to display; the
+	 * buttons stay available on the draft to retry by hand. Any other field
+	 * (dates, label, default points, description...) never touches the
+	 * voters or the thirdparty list.
 	 *
 	 * @param	User		$user		User that modifies
 	 * @param	int<0,1>	$notrigger	0=launch triggers after, 1=disable triggers
@@ -389,28 +422,25 @@ class Campaign extends CommonObject
 	 */
 	public function update(User $user, $notrigger = 0)
 	{
+		global $langs;
+
 		if ($this->fetchStatusFromDb() !== self::STATUS_DRAFT) {
 			$this->error = 'ErrorCampaignNotDraftCannotBeModified';
 			return -1;
 		}
 
-		$this->db->begin();
-
-		// A thirdparty list synced from another tag no longer means anything:
-		// empty it, the user syncs again from the new tag.
-		$sql = "SELECT fk_category FROM ".$this->db->prefix().$this->table_element;
+		$sql = "SELECT fk_category, fk_usergroup FROM ".$this->db->prefix().$this->table_element;
 		$sql .= " WHERE rowid = ".((int) $this->id);
 		$resql = $this->db->query($sql);
 		$previous = $resql ? $this->db->fetch_object($resql) : null;
 		if (!$previous) {
 			$this->error = 'Error '.$this->db->lasterror();
-			$this->db->rollback();
 			return -1;
 		}
-		if ((int) $previous->fk_category !== (int) $this->fk_category && $this->deleteThirdparties() < 0) {
-			$this->db->rollback();
-			return -1;
-		}
+		$categoryChanged = (int) $previous->fk_category !== (int) $this->fk_category;
+		$groupChanged = (int) $previous->fk_usergroup !== (int) $this->fk_usergroup;
+
+		$this->db->begin();
 
 		$result = $this->updateCommon($user, $notrigger);
 		if ($result <= 0) {
@@ -419,6 +449,16 @@ class Campaign extends CommonObject
 		}
 
 		$this->db->commit();
+
+		$langs->load('salonerp@salonerp');
+		$this->errors = array();
+		if ($groupChanged && !empty($this->fk_usergroup) && $this->syncVotersFromGroup($user) <= 0) {
+			$this->errors[] = $langs->trans($this->error);
+		}
+		if ($categoryChanged && !empty($this->fk_category) && $this->syncThirdpartiesFromCategory($user) <= 0) {
+			$this->errors[] = $langs->trans($this->error);
+		}
+
 		return $result;
 	}
 
@@ -833,8 +873,10 @@ class Campaign extends CommonObject
 	}
 
 	/**
-	 * Empty the campaign's thirdparty list. No status check: callers (update()
-	 * on a tag change, delete()) have already checked the campaign is a draft.
+	 * Empty the campaign's thirdparty list. No status check: the only caller
+	 * (delete()) has already checked the campaign is a draft. A tag change on
+	 * a draft no longer goes through here: update() resynchronises the list
+	 * from the new tag instead of emptying it (syncThirdpartiesFromCategory()).
 	 *
 	 * @return	int<-1,1>	Return integer <0 if KO, >0 if OK
 	 */
@@ -909,10 +951,11 @@ class Campaign extends CommonObject
 	 * @param	array<int,array{id:int,name:string,points:int}>	$voters			Voters with their name and envelope, any order
 	 * @param	array<int,array{id:int,name:?string,code_client:?string,zip:?string,town:?string}>	$thirdparties	Snapshot of the frozen thirdparty list, any order
 	 * @param	array{category:string,group:string,creator:string}	$names	Tag label, group name and creator name as at validation
+	 * @param	int		$ballotSize		Worst-case ballot plaintext size, in bytes, computed by computeBallotSize(): every ballot of this campaign is padded (sodium_pad()) to exactly this many bytes before sealing, so a ciphertext's length never leaks how a vote was cast
 	 * @return	string	JSON-encoded canonical payload
 	 * @throws	\JsonException	If the payload cannot be JSON-encoded
 	 */
-	public function getGenesisPayload(array $voters, array $thirdparties, array $names)
+	public function getGenesisPayload(array $voters, array $thirdparties, array $names, int $ballotSize)
 	{
 		global $conf;
 
@@ -945,6 +988,7 @@ class Campaign extends CommonObject
 		});
 
 		$payload = array(
+			'ballot_size' => $ballotSize,
 			'category' => array('id' => (int) $this->fk_category, 'label' => (string) $names['category']),
 			'creator' => array('id' => (int) $this->fk_user_creat, 'name' => (string) $names['creator']),
 			'date_end' => gmdate('Y-m-d\TH:i:s\Z', (int) $this->date_end),
@@ -961,6 +1005,143 @@ class Campaign extends CommonObject
 		ksort($payload);
 
 		return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+	}
+
+	/**
+	 * Canonical JSON of one ballot's plaintext: {"campaign","date","fk_user",
+	 * "points","seq"} with sorted keys, unescaped slashes/unicode. This is the
+	 * SOLE place that builds this string: castVote() calls it to seal the real
+	 * ballot, computeBallotSize() calls it to measure the campaign's worst
+	 * case. They must never diverge, or a ciphertext's padded length would
+	 * stop matching the genesis's ballot_size.
+	 *
+	 * @param	string							$ref		Campaign ref
+	 * @param	int								$timestamp	Unix timestamp of the vote; gmdate() always encodes 'date' on the same 20 bytes, whatever this value is
+	 * @param	int								$fkUser		Voting user id
+	 * @param	array<int,array{0:int,1:int}>	$pairs		[thirdparty id, points] pairs, zero allocations already dropped, any order
+	 * @param	int								$seq		Rank of the vote in the chain
+	 * @return	string							JSON-encoded ballot plaintext
+	 * @throws	\JsonException					If the payload cannot be JSON-encoded
+	 */
+	public static function buildBallotPlaintext(string $ref, int $timestamp, int $fkUser, array $pairs, int $seq): string
+	{
+		return json_encode(array(
+			'campaign' => $ref,
+			'date' => gmdate('Y-m-d\TH:i:s\Z', $timestamp),
+			'fk_user' => $fkUser,
+			'points' => array_values($pairs),
+			'seq' => $seq,
+		), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+	}
+
+	/**
+	 * The public meaning of a decoded ballot (its 'fk_user' and 'points' pairs
+	 * resolved to names), for display only: never part of anything hashed or
+	 * compared. Reused by buildReceipt() (the voter's own ballot, right after
+	 * casting it) and by SalonerpVoteFile's receipt check (a reader verifying
+	 * someone else's receipt against a vote file, from that file's own genesis).
+	 *
+	 * @param	array{fk_user?:int,date?:string,points?:array<int,array{0:int,1:int}>}	$ballot		Decoded ballot plaintext (json_decode of buildBallotPlaintext())
+	 * @param	?array{voters?:array<int,mixed>,thirdparties?:array<int,mixed>}		$genesis	Decoded genesis payload names are read from, or null
+	 * @return	array{date:string,fk_user:int,voter:string,thirdparties:array<int,array{id:int,name:string,points:int}>}
+	 */
+	public static function describeBallot(array $ballot, ?array $genesis): array
+	{
+		$thirdpartyNames = array();
+		$voterNames = array();
+		if (is_array($genesis)) {
+			foreach ((isset($genesis['thirdparties']) && is_array($genesis['thirdparties'])) ? $genesis['thirdparties'] : array() as $t) {
+				if (is_array($t) && isset($t['id'])) {
+					$thirdpartyNames[(int) $t['id']] = isset($t['name']) ? (string) $t['name'] : '';
+				}
+			}
+			foreach ((isset($genesis['voters']) && is_array($genesis['voters'])) ? $genesis['voters'] : array() as $v) {
+				if (is_array($v) && isset($v['id'])) {
+					$voterNames[(int) $v['id']] = isset($v['name']) ? (string) $v['name'] : '';
+				}
+			}
+		}
+
+		$fkUser = isset($ballot['fk_user']) ? (int) $ballot['fk_user'] : 0;
+		$result = array(
+			'date' => isset($ballot['date']) ? (string) $ballot['date'] : '',
+			'fk_user' => $fkUser,
+			'voter' => (isset($voterNames[$fkUser]) && $voterNames[$fkUser] !== '') ? $voterNames[$fkUser] : ('#'.$fkUser),
+			'thirdparties' => array(),
+		);
+		foreach ((isset($ballot['points']) && is_array($ballot['points'])) ? $ballot['points'] : array() as $pair) {
+			$socId = (int) $pair[0];
+			$result['thirdparties'][] = array(
+				'id' => $socId,
+				'name' => (isset($thirdpartyNames[$socId]) && $thirdpartyNames[$socId] !== '') ? $thirdpartyNames[$socId] : ('#'.$socId),
+				'points' => (int) $pair[1],
+			);
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Worst-case size, in bytes, of this campaign's ballot plaintext: a true
+	 * majorant, computed once at validation and frozen into the genesis
+	 * ('ballot_size'). It assumes, all at once:
+	 *  - every tier of the frozen list is bid on (a real ballot only lists the
+	 *    ones it bids on, zero allocations dropped: never more than all of them);
+	 *  - every one of those bids equals the largest envelope of the campaign
+	 *    (a real bid is at most its own voter's envelope, itself at most the
+	 *    largest one, whatever tier it lands on);
+	 *  - the voter is the one with the largest id (a real fk_user is one of
+	 *    the campaign's voters, at most the largest of their ids);
+	 *  - seq is the number of voters (each voter votes at most once, so no
+	 *    real seq ever exceeds that count);
+	 *  - 'date' is always 20 bytes, whatever the instant: any value does.
+	 * castVote() then pads every real plaintext up to this exact size with
+	 * sodium_pad(), so a ciphertext's length no longer depends on how many
+	 * tiers were bid on, how large the bids were, or who voted.
+	 *
+	 * @param	int[]			$thirdpartyIds	Frozen thirdparty ids
+	 * @param	array<int,int>	$pointsByUser	Voters' envelopes, keyed by user id (never empty: validate() already refuses an empty voter list before this is called)
+	 * @return	int				Ballot size, in bytes: strictly greater than the worst-case plaintext computed here
+	 * @throws	\JsonException
+	 */
+	public function computeBallotSize(array $thirdpartyIds, array $pointsByUser): int
+	{
+		$maxEnvelope = empty($pointsByUser) ? 0 : max($pointsByUser);
+		$maxUserId = empty($pointsByUser) ? 0 : max(array_keys($pointsByUser));
+
+		$ids = array_map('intval', $thirdpartyIds);
+		sort($ids);
+		$pairs = array();
+		foreach ($ids as $socId) {
+			$pairs[] = array($socId, $maxEnvelope);
+		}
+
+		// The exact instant does not matter (gmdate() output is fixed-length),
+		// but a real one keeps this reproducible and avoids relying on 0.
+		$worstCase = self::buildBallotPlaintext((string) $this->ref, (int) $this->date_end, $maxUserId, $pairs, count($pointsByUser));
+
+		// sodium_pad($plaintext, $ballotSize) pads up to the smallest multiple
+		// of $ballotSize strictly greater than strlen($plaintext): with the
+		// worst case one byte under $ballotSize, that multiple is always
+		// $ballotSize itself, for every real (smaller) ballot too.
+		return strlen($worstCase) + 1;
+	}
+
+	/**
+	 * The ballot_size fixed by this campaign's stored genesis. Never
+	 * recomputed: it is read back exactly as validate() froze it, the sole
+	 * size to which castVote()/openBallots() pad or unpad every ballot.
+	 *
+	 * @return	?int	Ballot size, or null if the stored genesis has none (a genesis frozen before this size existed: refused everywhere, see README)
+	 */
+	protected function genesisBallotSize(): ?int
+	{
+		$genesis = json_decode((string) $this->genesis_payload, true);
+		if (!is_array($genesis) || !isset($genesis['ballot_size']) || !is_int($genesis['ballot_size']) || $genesis['ballot_size'] <= 0) {
+			return null;
+		}
+
+		return $genesis['ballot_size'];
 	}
 
 	/**
@@ -1120,7 +1301,8 @@ class Campaign extends CommonObject
 		list($namedVoters, $names) = $this->getGenesisNames($pointsByUser);
 
 		try {
-			$this->genesis_payload = $this->getGenesisPayload($namedVoters, $snapshot, $names);
+			$ballotSize = $this->computeBallotSize(array_keys($snapshot), $pointsByUser);
+			$this->genesis_payload = $this->getGenesisPayload($namedVoters, $snapshot, $names, $ballotSize);
 		} catch (\JsonException $e) {
 			$this->errors[] = $langs->trans('ErrorCampaignGenesisPayloadEncoding');
 			sodium_memzero($privateKeyB64);
@@ -1416,6 +1598,99 @@ class Campaign extends CommonObject
 	}
 
 	/**
+	 * Explicit, from-scratch construction of a libsodium "sealed box": exactly
+	 * what sodium_crypto_box_seal($padded, $publicKey) computes internally,
+	 * except that function generates its own ephemeral keypair and throws the
+	 * secret half away, while this one takes it as a parameter so the caller
+	 * can keep it. Pure and reusable: castVote() calls it to seal a real vote
+	 * (a fresh eph_sk every time, see there), and SalonerpVoteFile checks a
+	 * voter's receipt by calling it again with the eph_sk out of that receipt
+	 * and comparing the result, byte for byte, to the ciphertext recorded in
+	 * the chain at the receipt's seq.
+	 *
+	 * ciphertext = eph_pk || crypto_box(padded, nonce, eph_sk, publicKey)
+	 * nonce      = BLAKE2b(eph_pk . publicKey, SODIUM_CRYPTO_BOX_NONCEBYTES)
+	 *
+	 * This is bit-for-bit what sodium_crypto_box_seal() would have produced
+	 * with this eph_sk, and the result is openable by
+	 * sodium_crypto_box_seal_open() unchanged: a sealed box only ever opens to
+	 * the one plaintext it was built from, so nobody, not even the voter who
+	 * holds eph_sk, can later forge a receipt matching a different ballot.
+	 *
+	 * @param	string	$padded				Padded plaintext to seal (sodium_pad() output)
+	 * @param	string	$publicKey			Recipient's raw X25519 public key (32 bytes)
+	 * @param	string	$ephemeralSecret	Raw X25519 secret key of a fresh, one-time keypair (32 bytes)
+	 * @return	string						Raw sealed box: eph_pk (32 bytes) followed by the box (len($padded) + SODIUM_CRYPTO_BOX_SEALBYTES - 32 bytes)
+	 */
+	public static function sealBallot(string $padded, string $publicKey, string $ephemeralSecret): string
+	{
+		$ephemeralPublic = sodium_crypto_box_publickey_from_secretkey($ephemeralSecret);
+		$nonce = sodium_crypto_generichash($ephemeralPublic.$publicKey, '', SODIUM_CRYPTO_BOX_NONCEBYTES);
+		$keypair = sodium_crypto_box_keypair_from_secretkey_and_publickey($ephemeralSecret, $publicKey);
+
+		$box = sodium_crypto_box($padded, $nonce, $keypair);
+
+		sodium_memzero($keypair);
+		sodium_memzero($nonce);
+
+		return $ephemeralPublic.$box;
+	}
+
+	/**
+	 * Build a voter's receipt right after their vote was sealed: the one and
+	 * only proof they can hold of its exact content, since the campaign never
+	 * stores eph_sk anywhere (see castVote()). Format 'salonerp-receipt/1'.
+	 * Pure: everything it needs is passed in, nothing is read from the
+	 * database.
+	 *
+	 * Anyone holding this receipt and a vote file of the campaign can, without
+	 * any campaign key, pad 'ballot' to the file's genesis ballot_size, reseal
+	 * it with sealBallot() and 'ephemeral_key', and compare the result to the
+	 * ciphertext of vote #seq in the file: see SalonerpVoteFile's receipt
+	 * check. A sealed box opens to a single plaintext, so a match is
+	 * conclusive proof of what was cast, and nothing else can ever be made to
+	 * match it.
+	 *
+	 * @param	string	$ref				Campaign ref
+	 * @param	string	$genesisPayload		Campaign's stored genesis payload (used only to name voters/thirdparties for 'ballot_decoded')
+	 * @param	string	$genesisHash		Campaign's stored genesis hash
+	 * @param	int		$seq				Rank of the vote in the chain
+	 * @param	string	$hash				Chain hash of the vote (Campaign::computeVoteHash())
+	 * @param	string	$ballotPlaintext	Exact, unpadded JSON of the ballot (Campaign::buildBallotPlaintext())
+	 * @param	string	$ephemeralSecret	Raw X25519 secret key of the fresh, one-time keypair used to seal this vote (32 bytes)
+	 * @return	string						Pretty-printed JSON receipt
+	 */
+	public static function buildReceipt(string $ref, string $genesisPayload, string $genesisHash, int $seq, string $hash, string $ballotPlaintext, string $ephemeralSecret): string
+	{
+		global $langs;
+
+		$langs->load('salonerp@salonerp');
+
+		$genesis = json_decode($genesisPayload, true);
+		$ballotArray = json_decode($ballotPlaintext, true);
+		$decoded = is_array($ballotArray) ? self::describeBallot($ballotArray, is_array($genesis) ? $genesis : null) : array();
+
+		$receipt = array(
+			'format' => 'salonerp-receipt/1',
+			'campaign' => $ref,
+			'genesis_hash' => $genesisHash,
+			'seq' => $seq,
+			'hash' => $hash,
+			'ballot' => $ballotPlaintext,
+			'ephemeral_key' => base64_encode($ephemeralSecret),
+			'how_to_verify' => array(
+				$langs->transnoentitiesnoconv('ReceiptHowToVerify1'),
+				$langs->transnoentitiesnoconv('ReceiptHowToVerify2'),
+				$langs->transnoentitiesnoconv('ReceiptHowToVerify3'),
+				$langs->transnoentitiesnoconv('ReceiptHowToVerify4'),
+			),
+			'ballot_decoded' => $decoded,
+		);
+
+		return json_encode($receipt, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+	}
+
+	/**
 	 * Cast a vote: seal it with the campaign public key and append it to the
 	 * chain. Runs under the campaign lock (see lockAndFetchStatus()), so the
 	 * checks below and the append are atomic, and two votes can never compete
@@ -1432,12 +1707,23 @@ class Campaign extends CommonObject
 	 *
 	 * The first valid vote (the creator's) opens the campaign to the others.
 	 *
+	 * On success, $receiptOut is filled with the voter's receipt
+	 * (Campaign::buildReceipt()): their sole proof of this vote's exact
+	 * content, since the ephemeral secret key used to seal it (eph_sk) is
+	 * generated fresh here and NEVER persisted anywhere (no column carries
+	 * it, no session, no log, no file) — exactly like validate() with the
+	 * campaign's private key, it exists only in this call's locals and in
+	 * $receiptOut, until the caller shows it to the voter once and it is
+	 * wiped. $receiptOut is left untouched (whatever the caller passed) on
+	 * every refused path.
+	 *
 	 * @param	User				$user			Voting user
 	 * @param	array<int|string,int|string>	$allocations	Points by thirdparty id
 	 * @param	string				$privateKeyB64	Creator's private key, required for the first vote only
+	 * @param	?string				$receiptOut		Out: JSON receipt on success (Campaign::buildReceipt()), untouched on failure
 	 * @return	int								Rank of the vote in the chain (>0), or -1 if KO
 	 */
-	public function castVote(User $user, array $allocations, string $privateKeyB64 = '')
+	public function castVote(User $user, array $allocations, string $privateKeyB64 = '', ?string &$receiptOut = null)
 	{
 		global $langs;
 
@@ -1450,6 +1736,16 @@ class Campaign extends CommonObject
 		$status = $this->lockAndFetchStatus();
 		if ($status !== self::STATUS_VALIDATED && $status !== self::STATUS_VOTE_OPEN) {
 			$this->errors[] = $langs->trans('ErrorCampaignVoteNotOpen');
+			$this->db->rollback();
+			return -1;
+		}
+
+		// No compatibility: a genesis frozen before ballot_size existed cannot
+		// be padded to a size it never fixed, so voting on it is refused
+		// outright, same as reveal() and SalonerpVoteFile::analyse().
+		$ballotSize = $this->genesisBallotSize();
+		if ($ballotSize === null) {
+			$this->errors[] = $langs->trans('ErrorCampaignGenesisMissingBallotSize');
 			$this->db->rollback();
 			return -1;
 		}
@@ -1541,16 +1837,36 @@ class Campaign extends CommonObject
 		foreach ($ballot as $socId => $points) {
 			$pairs[] = array($socId, $points);
 		}
-		$plaintext = json_encode(array(
-			'campaign' => (string) $this->ref,
-			'date' => gmdate('Y-m-d\TH:i:s\Z', $now),
-			'fk_user' => (int) $user->id,
-			'points' => $pairs,
-			'seq' => $seq,
-		), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-		$publicKey = base64_decode((string) $this->public_key, true);
-		$ciphertext = base64_encode(sodium_crypto_box_seal($plaintext, (string) $publicKey));
-		sodium_memzero($plaintext);
+		$plaintext = self::buildBallotPlaintext((string) $this->ref, (int) $now, (int) $user->id, $pairs, $seq);
+		// Guard, never expected to trigger: computeBallotSize() at validation
+		// time is a true majorant of every ballot this method can ever build.
+		if (strlen($plaintext) >= $ballotSize) {
+			$this->errors[] = $langs->trans('ErrorCampaignBallotExceedsSize');
+			sodium_memzero($plaintext);
+			$this->db->rollback();
+			return -1;
+		}
+		// sodium_pad() with blockSize = $ballotSize pads to the next multiple
+		// of $ballotSize strictly above strlen($plaintext): since that length
+		// is < $ballotSize, the result is always exactly $ballotSize bytes,
+		// whatever the ballot. That is what hides its shape in the ciphertext.
+		$padded = sodium_pad($plaintext, $ballotSize);
+		$publicKey = (string) base64_decode((string) $this->public_key, true);
+
+		// A fresh, one-time keypair for this vote alone. Its secret half
+		// (eph_sk) is what lets sealBallot() be reconstructed and checked
+		// later against a receipt (see SalonerpVoteFile): it is NEVER
+		// persisted (no column of salonerp_campaign_vote carries it, no
+		// session, no log, no file), only ever kept in the locals of this
+		// call, until it is handed once to the voter below and wiped.
+		$ephKeypair = sodium_crypto_box_keypair();
+		$ephemeralSecret = sodium_crypto_box_secretkey($ephKeypair);
+		sodium_memzero($ephKeypair);
+
+		$ciphertextRaw = self::sealBallot($padded, $publicKey, $ephemeralSecret);
+		sodium_memzero($padded);
+		$ciphertext = base64_encode($ciphertextRaw);
+		sodium_memzero($ciphertextRaw);
 		$hash = self::computeVoteHash($seq, $prevHash, $ciphertext);
 
 		$sql = "INSERT INTO ".$this->db->prefix()."salonerp_campaign_vote";
@@ -1560,6 +1876,8 @@ class Campaign extends CommonObject
 		$sql .= ", '".$this->db->idate($now)."')";
 		if (!$this->db->query($sql)) {
 			$this->errors[] = $this->db->lasterror();
+			sodium_memzero($plaintext);
+			sodium_memzero($ephemeralSecret);
 			$this->db->rollback();
 			return -1;
 		}
@@ -1570,6 +1888,8 @@ class Campaign extends CommonObject
 			$sql .= " WHERE rowid = ".((int) $this->id)." AND status = ".self::STATUS_VALIDATED;
 			if (!$this->db->query($sql)) {
 				$this->errors[] = $this->db->lasterror();
+				sodium_memzero($plaintext);
+				sodium_memzero($ephemeralSecret);
 				$this->db->rollback();
 				return -1;
 			}
@@ -1578,7 +1898,49 @@ class Campaign extends CommonObject
 
 		$this->db->commit();
 
+		// Built and filled in only on this successful path, exactly once:
+		// like validate()'s private key, the receipt (and the eph_sk it
+		// carries) only ever exists in this response and the voter's browser
+		// from here on. Never re-derivable afterwards: nothing above kept it.
+		$receiptOut = self::buildReceipt((string) $this->ref, (string) $this->genesis_payload, (string) $this->genesis_hash, $seq, $hash, $plaintext, $ephemeralSecret);
+
+		sodium_memzero($plaintext);
+		sodium_memzero($ephemeralSecret);
+
 		return $seq;
+	}
+
+	/**
+	 * Check a voter's receipt against THIS campaign's own official chain: the
+	 * vote file is built here, server-side (buildVoteFile()), instead of
+	 * being supplied by the caller. This is what lets "Contester un vote"
+	 * (the Decrypt tab) verify a receipt on its own, with nothing but the
+	 * receipt itself — no vote file to hunt for or trust beforehand.
+	 *
+	 * The reference here is this Dolibarr instance: a match only proves the
+	 * receipt agrees with what THIS server currently serves as its official
+	 * chain. For a check that does not have to trust this server at all,
+	 * the receipt must instead be checked against an independently-obtained
+	 * vote file, e.g. on the External decryption page of another instance
+	 * (see SalonerpVoteFile::analyse() directly).
+	 *
+	 * @param	string	$receiptJson	Receipt content to check (Campaign::buildReceipt())
+	 * @return	?array<string,mixed>	SalonerpVoteFile::analyse()'s 'receipt' entry, or null if the official file itself could not be built (fetchVotes() SQL error)
+	 */
+	public function checkReceiptAgainstOfficialChain(string $receiptJson): ?array
+	{
+		dol_include_once('/salonerp/class/salonerpvotefile.class.php');
+
+		$officialFile = $this->buildVoteFile();
+		if (!is_string($officialFile)) {
+			return null;
+		}
+		$official = $this->fetchVotes();
+		$expected = array('ref' => (string) $this->ref, 'genesis_hash' => (string) $this->genesis_hash);
+
+		$report = SalonerpVoteFile::analyse($officialFile, '', $expected, is_array($official) ? $official : array(), $receiptJson);
+
+		return $report['receipt'];
 	}
 
 	/**
@@ -1673,6 +2035,11 @@ class Campaign extends CommonObject
 	/**
 	 * Open every sealed ballot of the chain with a private key, and check each
 	 * one against its database row: same rank, same voter, same campaign.
+	 * Refuses outright if the stored genesis carries no ballot_size (a
+	 * non-compliant genesis: no compatibility). Otherwise, after
+	 * sealed_box_open(), the plaintext's length must be exactly ballot_size
+	 * and sodium_unpad() must succeed: any other outcome is an anomaly, not a
+	 * key mismatch, and is refused the same way as an unreadable ballot.
 	 *
 	 * @param	string	$privateKeyB64	Base64 private key of the campaign
 	 * @return	array<array{seq:int,fk_user:int,date:string,points:array<array{0:int,1:int}>}>|int<-1,-1>	Ballots by seq, or -1 (reason in ->error)
@@ -1680,6 +2047,12 @@ class Campaign extends CommonObject
 	protected function openBallots(string $privateKeyB64)
 	{
 		global $langs;
+
+		$ballotSize = $this->genesisBallotSize();
+		if ($ballotSize === null) {
+			$this->error = $langs->trans('ErrorCampaignGenesisMissingBallotSize');
+			return -1;
+		}
 
 		$sql = "SELECT seq, fk_user, ciphertext FROM ".$this->db->prefix()."salonerp_campaign_vote";
 		$sql .= " WHERE fk_campaign = ".((int) $this->id)." ORDER BY seq ASC";
@@ -1693,10 +2066,25 @@ class Campaign extends CommonObject
 		$ballots = array();
 		$error = '';
 		while ($obj = $this->db->fetch_object($resql)) {
-			$plain = sodium_crypto_box_seal_open((string) base64_decode((string) $obj->ciphertext, true), $keypair);
+			$padded = sodium_crypto_box_seal_open((string) base64_decode((string) $obj->ciphertext, true), $keypair);
+			$plain = false;
+			$wrongSize = false;
+			if ($padded !== false) {
+				if (strlen($padded) !== $ballotSize) {
+					$wrongSize = true;
+				} else {
+					try {
+						$plain = sodium_unpad($padded, $ballotSize);
+					} catch (\SodiumException $e) {
+						$wrongSize = true;
+					}
+				}
+			}
 			$ballot = ($plain === false) ? null : json_decode($plain, true);
 			if (!is_array($ballot)) {
-				$error = $langs->trans('ErrorCampaignBallotUnreadable', (int) $obj->seq);
+				$error = $wrongSize
+					? $langs->trans('ErrorCampaignBallotWrongSize', (int) $obj->seq)
+					: $langs->trans('ErrorCampaignBallotUnreadable', (int) $obj->seq);
 				break;
 			}
 			if ((int) $ballot['seq'] !== (int) $obj->seq || (int) $ballot['fk_user'] !== (int) $obj->fk_user || (string) $ballot['campaign'] !== (string) $this->ref) {
