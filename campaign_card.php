@@ -365,7 +365,7 @@ if ($action == 'create') {
 	print '</td></tr>';
 
 	print '<tr><td>'.$langs->trans('Description').'</td><td>';
-	print '<textarea name="description" class="quatrevingtpercent" rows="3">'.dol_escape_htmltag(GETPOST('description', 'restricthtml')).'</textarea>';
+	print '<textarea name="description" class="quatrevingtpercent" rows="3">'.dol_escape_htmltag(GETPOST('description', 'restricthtml'), 0, 1).'</textarea>';
 	print '</td></tr>';
 
 	print '<tr><td class="fieldrequired">'.$langs->trans('DateStart').'</td><td>';
@@ -415,7 +415,7 @@ if ($action == 'create') {
 	print '</td></tr>';
 
 	print '<tr><td>'.$langs->trans('Description').'</td><td>';
-	print '<textarea name="description" class="quatrevingtpercent" rows="3">'.dol_escape_htmltag((string) $object->description).'</textarea>';
+	print '<textarea name="description" class="quatrevingtpercent" rows="3">'.dol_escape_htmltag((string) $object->description, 0, 1).'</textarea>';
 	print '</td></tr>';
 
 	print '<tr><td class="fieldrequired">'.$langs->trans('DateStart').'</td><td>';
