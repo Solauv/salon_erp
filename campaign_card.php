@@ -191,6 +191,12 @@ if (empty($reshook)) {
 		if (!$error) {
 			$result = $object->create($user);
 			if ($result > 0) {
+				// The draft is created even if the automatic synchronisation of
+				// voters or thirdparties failed: report it, the "Synchroniser"
+				// buttons on the draft let the user retry by hand.
+				if (!empty($object->errors)) {
+					setEventMessages(null, $object->errors, 'errors');
+				}
 				header('Location: '.dol_buildpath('/salonerp/campaign_card.php', 1).'?id='.$result);
 				exit;
 			} else {
@@ -224,6 +230,12 @@ if (empty($reshook)) {
 		} else {
 			$result = $object->update($user);
 			if ($result > 0) {
+				// The draft is modified even if the automatic resynchronisation
+				// triggered by a group/tag change failed: report it, the
+				// "Synchroniser" buttons on the draft let the user retry by hand.
+				if (!empty($object->errors)) {
+					setEventMessages(null, $object->errors, 'errors');
+				}
 				header('Location: '.dol_buildpath('/salonerp/campaign_card.php', 1).'?id='.$object->id);
 				exit;
 			} else {

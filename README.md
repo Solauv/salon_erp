@@ -44,14 +44,26 @@ Menu **Votes → Nouvelle campagne** : référence, libellé, dates et heures de
 de **fin** du vote, **tag client** (les tiers concernés), **groupe des votants**, et
 points par défaut de chaque votant (1 si le champ reste vide).
 
+Dès l'enregistrement, la campagne est créée avec ses votants et ses tiers déjà à jour :
+plus besoin de cliquer sur les boutons de synchronisation juste pour voir apparaître le
+groupe et le tag choisis. De même, tant que la campagne reste en brouillon, changer le
+**groupe** resynchronise automatiquement les votants, et changer le **tag** resynchronise
+automatiquement les tiers ; les autres champs (dates, libellé, points par défaut,
+description…) ne touchent ni aux votants ni aux tiers.
+
 Sur la fiche de la campagne :
 
-- **Votants** — « Synchroniser avec le groupe » ajoute les membres actifs du groupe (le
-  responsable en fait toujours partie) ; les points de chacun se modifient dans le
-  tableau, puis « Enregistrer les points ». Un votant a au moins 1 point.
-- **Tiers de la campagne** — « Synchroniser avec le tag » reprend les tiers portant le
-  tag client. Si le tag de la campagne change, la liste est vidée : il faut
-  resynchroniser.
+- **Votants** — le bouton « Synchroniser avec le groupe » reste utile si la composition
+  du groupe change *après* la création ou la dernière modification (un membre arrive ou
+  part) : il ajoute les membres actifs du groupe (le responsable en fait toujours
+  partie) ; les points de chacun se modifient dans le tableau, puis « Enregistrer les
+  points ». Un votant a au moins 1 point.
+- **Tiers de la campagne** — le bouton « Synchroniser avec le tag » reste utile si les
+  tiers portant le tag changent après coup : il reprend les tiers actuellement tagués.
+
+Si une synchronisation automatique échoue (groupe ou tag introuvable entre-temps, par
+exemple), la campagne est tout de même créée ou modifiée : un message d'erreur l'indique,
+et les boutons « Synchroniser » permettent de relancer manuellement.
 
 Tant que la campagne est en brouillon, tout reste modifiable et elle peut être supprimée.
 
@@ -317,6 +329,15 @@ ligne de la campagne, relecture du statut). C'est le cas de `validate()`,
 campagne sont donc strictement séquentielles : aucune synchronisation ne peut se glisser
 entre la lecture et l'écriture de la validation, et deux votes ne peuvent pas se
 disputer le même rang.
+
+`create()` et `update()` appellent `syncVotersFromGroup()` et/ou
+`syncThirdpartiesFromCategory()` (à la création toujours, à la modification seulement si
+`fk_usergroup`/`fk_category` a changé) une fois leur propre écriture déjà validée —
+`createCommon()`/`updateCommon()` ouvrent et commitent leur propre transaction avant que
+l'appel de synchronisation n'ouvre la sienne. Ces synchronisations ne sont donc jamais
+imbriquées dans la transaction de `create()`/`update()` : un échec de synchronisation ne
+peut pas faire annuler la création ou la modification déjà écrite, et se traduit par un
+message d'erreur (`->errors`) que l'appelant affiche, sans bloquer l'enregistrement.
 
 ## Cryptographie
 

@@ -226,7 +226,14 @@ class Campaign extends CommonObject
 	}
 
 	/**
-	 * Create object into database
+	 * Create object into database, then run the same two synchronisations the
+	 * "Synchroniser" buttons trigger by hand (syncVotersFromGroup(),
+	 * syncThirdpartiesFromCategory()): the draft shows its voters and
+	 * thirdparties immediately, with no click needed. Each sync opens its own
+	 * transaction, after createCommon()'s has already committed: a sync
+	 * failure never undoes the draft that was just created. On failure,
+	 * ->errors carries translated messages for the caller to display; the
+	 * buttons stay available on the draft to retry by hand.
 	 *
 	 * @param	User		$user		User that creates
 	 * @param	int<0,1> 	$notrigger	0=launch triggers after, 1=disable triggers
@@ -234,7 +241,7 @@ class Campaign extends CommonObject
 	 */
 	public function create(User $user, $notrigger = 0)
 	{
-		global $conf;
+		global $conf, $langs;
 
 		if (empty($this->tie_rule)) {
 			$this->tie_rule = self::TIE_RULE_DEFAULT;
@@ -248,7 +255,24 @@ class Campaign extends CommonObject
 			$this->entity = (int) $conf->entity;
 		}
 
-		return $this->createCommon($user, $notrigger);
+		$result = $this->createCommon($user, $notrigger);
+		if ($result <= 0) {
+			return $result;
+		}
+
+		$langs->load('salonerp@salonerp');
+		$this->errors = array();
+		// No group/category chosen (should not happen, both are mandatory
+		// fields, but the page must never be trusted blindly): simply skip
+		// the corresponding sync, no error.
+		if (!empty($this->fk_usergroup) && $this->syncVotersFromGroup($user) <= 0) {
+			$this->errors[] = $langs->trans($this->error);
+		}
+		if (!empty($this->fk_category) && $this->syncThirdpartiesFromCategory($user) <= 0) {
+			$this->errors[] = $langs->trans($this->error);
+		}
+
+		return $result;
 	}
 
 	/**
@@ -379,9 +403,18 @@ class Campaign extends CommonObject
 	/**
 	 * Update object into database. Refused once the campaign is no longer a draft:
 	 * nothing (fields, voters, points, thirdparties) can change after validate().
-	 * Changing the tag empties the thirdparty list. The status is
-	 * reread from the database: an in-memory ->status = STATUS_DRAFT on a
-	 * validated object must not grant anything.
+	 * The status is reread from the database: an in-memory ->status =
+	 * STATUS_DRAFT on a validated object must not grant anything.
+	 *
+	 * If the tag or the group changed, the corresponding list is
+	 * resynchronised automatically (syncThirdpartiesFromCategory() /
+	 * syncVotersFromGroup(), the same the "Synchroniser" buttons call by
+	 * hand), once the field update itself is safely committed: a sync
+	 * failure never undoes the fields that were just saved. On failure,
+	 * ->errors carries translated messages for the caller to display; the
+	 * buttons stay available on the draft to retry by hand. Any other field
+	 * (dates, label, default points, description...) never touches the
+	 * voters or the thirdparty list.
 	 *
 	 * @param	User		$user		User that modifies
 	 * @param	int<0,1>	$notrigger	0=launch triggers after, 1=disable triggers
@@ -389,28 +422,25 @@ class Campaign extends CommonObject
 	 */
 	public function update(User $user, $notrigger = 0)
 	{
+		global $langs;
+
 		if ($this->fetchStatusFromDb() !== self::STATUS_DRAFT) {
 			$this->error = 'ErrorCampaignNotDraftCannotBeModified';
 			return -1;
 		}
 
-		$this->db->begin();
-
-		// A thirdparty list synced from another tag no longer means anything:
-		// empty it, the user syncs again from the new tag.
-		$sql = "SELECT fk_category FROM ".$this->db->prefix().$this->table_element;
+		$sql = "SELECT fk_category, fk_usergroup FROM ".$this->db->prefix().$this->table_element;
 		$sql .= " WHERE rowid = ".((int) $this->id);
 		$resql = $this->db->query($sql);
 		$previous = $resql ? $this->db->fetch_object($resql) : null;
 		if (!$previous) {
 			$this->error = 'Error '.$this->db->lasterror();
-			$this->db->rollback();
 			return -1;
 		}
-		if ((int) $previous->fk_category !== (int) $this->fk_category && $this->deleteThirdparties() < 0) {
-			$this->db->rollback();
-			return -1;
-		}
+		$categoryChanged = (int) $previous->fk_category !== (int) $this->fk_category;
+		$groupChanged = (int) $previous->fk_usergroup !== (int) $this->fk_usergroup;
+
+		$this->db->begin();
 
 		$result = $this->updateCommon($user, $notrigger);
 		if ($result <= 0) {
@@ -419,6 +449,16 @@ class Campaign extends CommonObject
 		}
 
 		$this->db->commit();
+
+		$langs->load('salonerp@salonerp');
+		$this->errors = array();
+		if ($groupChanged && !empty($this->fk_usergroup) && $this->syncVotersFromGroup($user) <= 0) {
+			$this->errors[] = $langs->trans($this->error);
+		}
+		if ($categoryChanged && !empty($this->fk_category) && $this->syncThirdpartiesFromCategory($user) <= 0) {
+			$this->errors[] = $langs->trans($this->error);
+		}
+
 		return $result;
 	}
 
@@ -833,8 +873,10 @@ class Campaign extends CommonObject
 	}
 
 	/**
-	 * Empty the campaign's thirdparty list. No status check: callers (update()
-	 * on a tag change, delete()) have already checked the campaign is a draft.
+	 * Empty the campaign's thirdparty list. No status check: the only caller
+	 * (delete()) has already checked the campaign is a draft. A tag change on
+	 * a draft no longer goes through here: update() resynchronises the list
+	 * from the new tag instead of emptying it (syncThirdpartiesFromCategory()).
 	 *
 	 * @return	int<-1,1>	Return integer <0 if KO, >0 if OK
 	 */
